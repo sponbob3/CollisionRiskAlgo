@@ -16,8 +16,11 @@ every threshold is a named, documented parameter in
 
 ## Quick start
 
+Python 3.11 or 3.12 (on 3.13 or newer pandas 2.2 has no prebuilt wheel and
+a source build crashes; on macOS use `brew install python@3.12`).
+
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # put daily .parquet/.csv files of ALL traffic around the airport in
