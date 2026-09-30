@@ -1,0 +1,10 @@
+Vendored, unchanged, from the go-around detection pipeline:
+
+  repository: https://github.com/sponbob3/GoAroundAlgo
+  commit:     6d1aef96f263bbbcaeb35c7e0347ff9291c79270
+  path:       goaround_pipeline/
+
+Nothing in this folder is edited. All integration with the proximity-risk
+pipeline goes through proximity_pipeline/goaround_adapter.py. To update:
+replace this folder with the new upstream copy, update the commit above,
+and re-run the test suite (tests/test_goaround_parity.py in particular).
