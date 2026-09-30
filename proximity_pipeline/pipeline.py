@@ -511,6 +511,8 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
                   reps=config.BOOTSTRAP_REPS, ds_sig=ds_sig,
                   baseline_from=baseline_from)
     bl, bl_inv = res["baseline"], res["baseline_involved"]
+    res["files"] = files
+    res["heights"] = heights
     if not res["baseline_reused"] and baseline_from is None:
         ph = baseline_param_hash_for(spec, window_min, config.BASELINE_EXCLUSION_MIN)
         B.save_baseline(bl, baseline_dir, em_table, ph, ds_sig)
@@ -622,7 +624,7 @@ def _report(run_dir, res, chk, ev, days, em_table, args, baseline_dir,
     figdir.mkdir(exist_ok=True)
     viz.baseline_figures(res["baseline"], res["calibration"], em_table,
                          baseline_dir / "validation")
-    if not res["baseline_reused"]:
+    if not args.baseline_from:
         report_pdf.baseline_report(res["baseline"], res["baseline_involved"],
                                    res["calibration"], em_table, baseline_dir)
     if baseline_only:
