@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -45,7 +46,7 @@ COMMANDS = [
          "style state vectors for ALL traffic around the airport, columns: "
          "timestamp, icao24, callsign, latitude, longitude, altitude, "
          "geoaltitude, vertical_rate, groundspeed, track, onground. The "
-         "folder name is &lt;ICAO&gt;_&lt;label&gt;; the prefix selects "
+         "folder name is <ICAO>_<label>; the prefix selects "
          "airports/<ICAO>.yaml. datasets/ is gitignored."),
         ("python run_proximity.py check-data KBNA_2025\n"
          "python run_proximity.py check-data KBNA_2025 --limit 5",
@@ -191,7 +192,7 @@ def main() -> None:
         rows = []
         for cmd, what in items:
             rows.append([Preformatted(wrap_command(cmd), code),
-                         Paragraph(what, body)])
+                         Paragraph(escape(what), body)])
         t = Table(rows, colWidths=[3.5 * inch, 3.4 * inch], hAlign="LEFT")
         t.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
