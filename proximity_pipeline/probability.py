@@ -48,6 +48,11 @@ def sample_prediction_errors(dg: DayGrid, presence: pd.DataFrame,
     if presence.empty:
         return pd.DataFrame(columns=["phase", "tau", "e_along", "e_cross",
                                      "e_z"])
+    from . import airspace
+    presence = presence[presence["r"] <= airspace.computation_radius_nm()]
+    if presence.empty:
+        return pd.DataFrame(columns=["phase", "tau", "e_along", "e_cross",
+                                     "e_z"])
     n = min(config.ERROR_MODEL_SAMPLES_PER_DAY, len(presence))
     pick = presence.iloc[rng.choice(len(presence), n, replace=False)]
     # index the grid by (leg, t) for the lookups

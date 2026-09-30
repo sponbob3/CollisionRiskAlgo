@@ -167,6 +167,10 @@ GLM_MIN_EVENTS = 50
 # events at all (recorded in baseline.json).
 BASELINE_HOUR_BLOCK_H = 1
 BASELINE_HOUR_BLOCK_FALLBACK_H = 3
+# A covariate level with fewer baseline windows than this, or with no
+# events at all, cannot be estimated on its own and is merged into the
+# reference level (the most frequent level of that factor).
+BASELINE_MIN_LEVEL_WINDOWS = 10
 # Dispersion test: negative binomial replaces Poisson when the boundary
 # likelihood-ratio test is significant at this level.
 BASELINE_DISPERSION_ALPHA = 0.05

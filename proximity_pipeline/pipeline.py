@@ -33,7 +33,7 @@ from . import config
 from . import goaround_adapter as ga
 from . import loading, pairs, probability
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 # proximity parameters that change the per-day computation
 DAY_PARAMS = (

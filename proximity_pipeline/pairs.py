@@ -158,22 +158,26 @@ def compute_day(dg: DayGrid, radius_nm: float | None = None,
     step = config.GRID_STEP_S
 
     g = dg.grid
-    inv = g[g["airborne"] & (g["r"] <= radius_nm) & (g["h"] <= ceiling_ft)]
-    phase = geometry.flight_phase(inv["x"], inv["y"], inv["track"],
-                                  inv["h"], inv["vrate"])
+    # presence: every airborne aircraft-second below the computation
+    # ceiling out to the load radius (so radius containment can be
+    # measured); pairs are formed only inside the computation radius
+    air = g[g["airborne"] & (g["h"] <= ceiling_ft)]
+    phase_all = geometry.flight_phase(air["x"], air["y"], air["track"],
+                                      air["h"], air["vrate"])
     presence = pd.DataFrame({
-        "t": inv["t"].to_numpy(),
-        "leg": inv["leg"].to_numpy(),
-        "r": inv["r"].to_numpy(),
-        "h": inv["h"].to_numpy(),
-        "interpolated": inv["interpolated"].to_numpy(),
-        "phase": phase,
+        "t": air["t"].to_numpy(),
+        "leg": air["leg"].to_numpy(),
+        "r": air["r"].to_numpy(),
+        "h": air["h"].to_numpy(),
+        "interpolated": air["interpolated"].to_numpy(),
+        "phase": phase_all,
     })
+    in_radius = (air["r"] <= radius_nm).to_numpy()
     cols = ["t", "leg", "x", "y", "z_baro", "z_geo", "h", "r", "vx", "vy",
             "vz", "track"]
-    inv = inv[cols].copy()
-    inv["phase"] = phase
-    inv["interpolated"] = presence["interpolated"].to_numpy()
+    inv = air[cols][in_radius].copy()
+    inv["phase"] = phase_all[in_radius]
+    inv["interpolated"] = presence["interpolated"].to_numpy()[in_radius]
     inv = inv.sort_values(["t", "leg"]).reset_index(drop=True)
 
     d_prune = prune_radius_nm(H, lookahead_s)
