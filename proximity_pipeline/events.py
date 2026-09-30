@@ -207,3 +207,63 @@ def event_aircraft_heights(events: pd.DataFrame, days: dict[str, DayCache],
     return pd.DataFrame(rows, columns=["event_id", "max_height_post_ft",
                                        "post_present_s",
                                        "post_beyond_radius_s"])
+
+
+def involved_counts(enc: pd.DataFrame, win: pd.DataFrame, prefix: str,
+                    tiers) -> pd.DataFrame:
+    """Encounter counts per (event_id, window) restricted to encounters
+    that involve the event aircraft (tagged by tag_encounters with
+    `prefix`), in the same column layout as attribute_encounters."""
+    from .windows import count_columns
+    from . import geometry
+    cols = count_columns(tiers)
+    out = pd.DataFrame(0, index=win.index, columns=cols, dtype=int)
+    if enc.empty:
+        return out
+    e = enc[enc[f"{prefix}_event_id"].notna() & enc["inside_ceiling"]]
+    if e.empty:
+        return out
+    key = list(zip(win["event_id"], win["window"]))
+    pos = {k: i for i, k in enumerate(key)}
+    nonproc = ~e["geometry_class"].isin(config.GEOM_PROCEDURAL_CLASSES)
+    for (eid, w, tier, kind, cls), n in e.assign(np_=nonproc).groupby(
+            [f"{prefix}_event_id", f"{prefix}_window", "tier", "kind",
+             "geometry_class"]).size().items():
+        i = pos.get((eid, w))
+        if i is None:
+            continue
+        out.iat[i, out.columns.get_loc(f"{tier}_{kind}")] += n
+        if kind == "any":
+            out.iat[i, out.columns.get_loc(f"{tier}_any_{cls}")] += n
+            if cls not in config.GEOM_PROCEDURAL_CLASSES:
+                out.iat[i, out.columns.get_loc(f"{tier}_any_nonprocedural")] += n
+    return out
+
+
+def involved_frame(win_metrics: pd.DataFrame, enc: pd.DataFrame,
+                   events: pd.DataFrame, exposure, prefix: str,
+                   tiers) -> pd.DataFrame:
+    """Go-around-involved scope (section 9.7): the window frame of the
+    event windows with counts restricted to encounters involving the
+    event aircraft and exposure = pair-hours involving that aircraft.
+    Covariates and quality come from the airspace-wide window."""
+    out = win_metrics.copy()
+    counts = involved_counts(enc, out, prefix, tiers)
+    for c in counts.columns:
+        out[c] = counts[c].to_numpy()
+    icao = events.set_index("event_id")["icao24"]
+    own = np.zeros(len(out)); present = np.zeros(len(out))
+    for i, (eid, a, b) in enumerate(zip(out["event_id"], out["t_start"],
+                                        out["t_end"])):
+        le = exposure.leg_exposure(icao.get(eid, ""), int(a), int(b))
+        own[i] = le["own_pair_s"] / 3600.0
+        present[i] = le["present_s"]
+    out["pair_hours_airspace"] = out["pair_hours"]
+    out["pair_hours"] = own
+    out["own_present_s"] = present
+    out["s_min"] = np.nan          # not defined for one aircraft's pairs
+    for tier in tiers:
+        out[f"{tier}_any_rate"] = np.where(
+            out["pair_hours"] > 0,
+            out[f"{tier}_any"] / out["pair_hours"].replace(0, np.nan), np.nan)
+    return out

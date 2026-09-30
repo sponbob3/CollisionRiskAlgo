@@ -227,15 +227,36 @@ def conflict_probability(rx, ry, vx, vy, dz, vz, t_cpa, track_a, track_b,
     w = support(nx, ny)
     p_h = norm.cdf(w - miss) - norm.cdf(-w - miss)
     # a stationary relative track: the pair stays where it is, so the
-    # "line" is a point; use the radial direction instead
+    # question is whether the Gaussian relative position lies inside the
+    # disc - a two-dimensional integral, done numerically
     if still.any():
-        rad = np.maximum(np.hypot(tx, ty), 1e-12)
-        wr = support(tx / rad, ty / rad)
-        p_h = np.where(still, norm.cdf(wr - rad) - norm.cdf(-wr - rad), p_h)
+        p_h = np.where(still, _disc_probability(px, py, sxx, syy, sxy, H),
+                       p_h)
     sz = np.sqrt(sz_a ** 2 + sz_b ** 2)
     dz_cpa = dz + vz * t_cpa
     p_z = norm.cdf((V - dz_cpa) / sz) - norm.cdf((-V - dz_cpa) / sz)
     return np.clip(p_h * p_z, 0.0, 1.0)
+
+
+def _disc_probability(px, py, sxx, syy, sxy, H: float, n: int = 48):
+    """P(|p + e| < H) for e ~ N(0, Sigma) by Gauss-Legendre quadrature
+    over the disc in polar coordinates (vectorised over rows)."""
+    from scipy.special import roots_legendre
+    xr, wr = roots_legendre(n)
+    r = H * (xr + 1) / 2; w_r = wr * H / 2
+    th = np.pi * (xr + 1); w_t = wr * np.pi
+    R, T = np.meshgrid(r, th, indexing="ij")
+    W = np.outer(w_r, w_t) * R
+    X, Y = R * np.cos(T), R * np.sin(T)
+    px = np.asarray(px, float)[:, None, None]; py = np.asarray(py, float)[:, None, None]
+    sxx = np.asarray(sxx, float)[:, None, None]
+    syy = np.asarray(syy, float)[:, None, None]
+    sxy = np.asarray(sxy, float)[:, None, None]
+    det = sxx * syy - sxy ** 2
+    dx, dy = X[None] - px, Y[None] - py
+    q = (syy * dx * dx - 2 * sxy * dx * dy + sxx * dy * dy) / det
+    dens = np.exp(-0.5 * q) / (2 * np.pi * np.sqrt(det))
+    return np.sum(dens * W[None], axis=(1, 2))
 
 
 def conflict_probability_mc(rx, ry, vx, vy, dz, vz, t_cpa, track_a,
@@ -299,3 +320,88 @@ def calibration(prob: np.ndarray, hit: np.ndarray,
     bss = 1.0 - brier / ref if ref > 0 else np.nan
     return {"table": pd.DataFrame(rows), "brier": brier, "bss": bss,
             "ece": float(ece), "n": int(len(prob)), "base_rate": float(base)}
+
+
+# ------------------------------------------- per-day pair probabilities --
+
+def day_pair_probabilities(dc, spec, error_model: "ErrorModel",
+                           tier: str) -> pd.DataFrame:
+    """Conflict probability of every cached pair-second of one day that
+    is not yet inside the tier zone and has its closest approach within
+    the lookahead. Columns: t, a, b, prob, hit (the pair actually enters
+    the zone, observed, within the lookahead after t)."""
+    from . import pairs as pairs_mod
+    p = dc.pairs
+    if p.empty:
+        return pd.DataFrame(columns=["t", "a", "b", "prob", "hit"])
+    p = p[pairs_mod.volume_mask(p, spec.radius_nm, spec.ceiling_ft)]
+    if p.empty:
+        return pd.DataFrame(columns=["t", "a", "b", "prob", "hit"])
+    H, V = spec.tiers[tier]
+    ev = pairs_mod.evaluate_tier(p, H, V, spec.lookahead_s)
+    cand = (~ev["observed"]) & (ev["t_cpa"] > 0) \
+        & (ev["t_cpa"] <= spec.lookahead_s)
+    q = p[cand.to_numpy()]
+    e = ev[cand.to_numpy()]
+    if q.empty:
+        return pd.DataFrame(columns=["t", "a", "b", "prob", "hit"])
+    ph_a = phase_group(q["pha"]); ph_b = phase_group(q["phb"])
+    t_cpa = e["t_cpa"].to_numpy(float)
+    sig_a = error_model.sigma(ph_a, t_cpa)
+    sig_b = error_model.sigma(ph_b, t_cpa)
+    prob = conflict_probability(
+        q["rx"], q["ry"], q["vx"], q["vy"], q["dz"], q["vz"], t_cpa,
+        q["tra"], q["trb"], sig_a, sig_b, H, V)
+    # did the pair actually enter the zone (observed) within the
+    # lookahead after t? Pairs get compact indices so the combined
+    # (pair, t) key fits comfortably in int64.
+    obs = p[ev["observed"].to_numpy()]
+    pair_all = np.concatenate([
+        obs["a"].to_numpy().astype(np.int64) * 100000 + obs["b"].to_numpy(),
+        q["a"].to_numpy().astype(np.int64) * 100000 + q["b"].to_numpy()])
+    _, inv = np.unique(pair_all, return_inverse=True)
+    idx_obs, idx_q = inv[:len(obs)].astype(np.int64), inv[len(obs):].astype(np.int64)
+    t_obs = obs["t"].to_numpy().astype(np.int64)
+    t_q = q["t"].to_numpy().astype(np.int64)
+    comb_obs = np.sort(idx_obs * (1 << 34) + t_obs)
+    comb_q = idx_q * (1 << 34) + t_q
+    hit = np.zeros(len(q), dtype=bool)
+    if len(comb_obs):
+        lo = np.searchsorted(comb_obs, comb_q + 1)
+        ok = lo < len(comb_obs)
+        nxt = comb_obs[np.minimum(lo, len(comb_obs) - 1)]
+        hit[ok] = ((nxt[ok] >> 34) == idx_q[ok]) & (
+            (nxt[ok] & ((1 << 34) - 1)) - t_q[ok] <= spec.lookahead_s)
+    return pd.DataFrame({"t": t_q, "a": q["a"].to_numpy(),
+                         "b": q["b"].to_numpy(), "prob": prob, "hit": hit})
+
+
+def expected_conflicts(prob_tables: dict, intervals: pd.DataFrame,
+                       tier: str) -> np.ndarray:
+    """Per interval: sum over pairs of the maximum conflict probability
+    the pair reached in the interval (section 7.3). prob_tables maps
+    day -> the frame from day_pair_probabilities (sorted by t)."""
+    out = np.zeros(len(intervals))
+    if not prob_tables:
+        return out
+    frames = [f for f in prob_tables.values() if len(f)]
+    if not frames:
+        return out
+    allp = pd.concat(frames, ignore_index=True).sort_values("t")
+    t = allp["t"].to_numpy()
+    key = (allp["a"].to_numpy().astype(np.int64) << 20) | allp["b"].to_numpy()
+    prob = allp["prob"].to_numpy()
+    lo = np.searchsorted(t, intervals["t_start"].to_numpy())
+    hi = np.searchsorted(t, intervals["t_end"].to_numpy())
+    for i, (a, b) in enumerate(zip(lo, hi)):
+        if b > a:
+            out[i] = pd.Series(prob[a:b]).groupby(key[a:b]).max().sum()
+    return out
+
+
+def calibration_from_tables(prob_tables: dict) -> dict:
+    frames = [f for f in prob_tables.values() if len(f)]
+    if not frames:
+        return calibration(np.array([]), np.array([]))
+    allp = pd.concat(frames, ignore_index=True)
+    return calibration(allp["prob"].to_numpy(), allp["hit"].to_numpy())
