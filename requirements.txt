@@ -10,6 +10,7 @@ matplotlib
 pyyaml
 pyproj
 traffic
+rich          # imported by some traffic releases without being declared
 reportlab
 pypdf
 pytest
