@@ -1,8 +1,7 @@
-# Python 3.11 or 3.12. On 3.13+ pandas 2.2 has no prebuilt wheel and a
-# source build crashes at runtime; create the venv with python3.12.
-# pandas < 2.3 because the traffic library (2.13) still imports a pandas
-# internal that 2.3 removed; everything else here works with either.
-pandas>=2.0,<2.3
+# Same environment as the go-around pipeline. pandas < 3 because the
+# traffic library (used only by new-airport and validate_cpa) does not
+# support pandas 3 yet.
+pandas>=2.0,<3
 pyarrow
 numpy
 scipy

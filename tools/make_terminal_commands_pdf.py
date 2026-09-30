@@ -28,14 +28,12 @@ COMMANDS = [
         ("git clone https://github.com/sponbob3/CollisionRiskAlgo.git\n"
          "cd CollisionRiskAlgo",
          "Get the repository."),
-        ("brew install python@3.12            # macOS, once\n"
-         "python3.12 -m venv .venv\n"
+        ("python3 -m venv .venv\n"
          "source .venv/bin/activate          # Windows: .venv\\Scripts\\activate\n"
          "pip install -r requirements.txt",
-         "Create the virtual environment on Python 3.11 or 3.12 and install "
-         "every dependency. Python 3.13+ is not supported: pandas 2.2 (pinned "
-         "below 2.3 for the traffic library) has no prebuilt wheel there and "
-         "a source build crashes."),
+         "Create the virtual environment (Python 3.11 or newer) and install "
+         "every dependency: the same packages as the go-around pipeline plus "
+         "scipy, statsmodels, pyproj and pytest."),
         ("git pull",
          "Update to the latest version later (run inside the repository)."),
     ]),
