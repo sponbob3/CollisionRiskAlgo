@@ -1,0 +1,14 @@
+# pandas < 2.3 because the traffic library (2.13) still imports a pandas
+# internal that 2.3 removed; everything else here works with either.
+pandas>=2.0,<2.3
+pyarrow
+numpy
+scipy
+statsmodels
+matplotlib
+pyyaml
+pyproj
+traffic
+reportlab
+pypdf
+pytest

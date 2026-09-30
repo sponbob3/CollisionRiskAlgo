@@ -1,0 +1,50 @@
+# Airport profile: Nashville International Airport (KBNA)
+# Runway thresholds/bearings and elevation from ourairports.com via the
+# traffic library (same profile format as the go-around pipeline).
+
+icao: KBNA
+name: Nashville International Airport
+latitude: 36.1245
+longitude: -86.6782
+elevation_ft: 599.0
+timezone: America/Chicago
+
+# training_ga | air_carrier
+preset: air_carrier
+
+# flat | dem  (dem = terrain-model AGL, auto-downloaded on first use)
+terrain: flat
+
+# true only for datasets queried as ARRIVALS at this airport
+assume_arrivals_dataset: false
+
+# name: [threshold_latitude, threshold_longitude, true_bearing_deg]
+runways:
+  "02C": [36.10329818725586, -86.68800354003906, 18.058715160870243]
+  "20C": [36.12419891357422, -86.67960357666016, 198.06366601725276]
+  "02L": [36.11769867, -86.68650055, 17.69144115569246]
+  "20R": [36.13779831, -86.6785965, 197.69610128563718]
+  "02R": [36.11270142, -86.66760254, 17.860142349474888]
+  "20L": [36.13359833, -86.65930176, 197.8650358483869]
+  "13": [36.141300201416016, -86.69539642333984, 133.30465499410963]
+  "31": [36.12049865722656, -86.66819763183594, 313.3206922728933]
+
+# Study volume for the proximity-risk pipeline (FRAMEWORK.md section 3).
+# The go-around pipeline ignores this block.
+airspace:
+  class: C                   # informational (B / C / D)
+  ceiling_ft_msl: 4600       # field elevation (599 ft) + 4,000 ft, rounded
+                             # to the charted 100 ft - VERIFY AGAINST THE
+                             # SECTIONAL CHART before publication
+  radius_nm: 10
+  ceiling_mode: auto         # auto | fixed   (section 3.3)
+
+# Optional runway-flow labels (FRAMEWORK.md section 8.4). Each window is
+# labelled by the flow that carries most of its arrivals; without this
+# block flows are derived automatically by grouping runway ends by
+# heading. KBNA's parallels run 02/20, plus the 13/31 crosswind runway.
+flows:
+  north: ["02L", "02C", "02R", "31"]
+  south: ["20L", "20C", "20R", "13"]
+
+overrides: {}

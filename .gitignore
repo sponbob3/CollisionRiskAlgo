@@ -1,0 +1,37 @@
+# Virtualenv and Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Run logs
+*.log
+
+# Raw ADS-B data (several GB; OpenSky terms do not permit redistribution).
+# Everything under datasets/ except the README stays local. Sample files
+# used for smoke tests are never committed either.
+datasets/*
+!datasets/README.md
+
+# Run outputs, stored baselines and per-day caches (regenerable; large).
+# The folder itself is tracked (via .gitkeep) so it is clear that runs
+# land here.
+output/*
+!output/.gitkeep
+
+# Cached terrain tiles (auto-downloaded per airport on first dem-mode run)
+airports/dem_cache/
+
+# Scratch dir written by direct goaround_pipeline module runs
+results/
