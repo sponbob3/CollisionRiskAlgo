@@ -551,7 +551,8 @@ def _plot_event(e, r, g, legs, enc, bl, spec, w, outdir):
                      else "no"])
     ax.set_xlabel("T1 encounters in the window")
     ax.set_ylabel("baseline probability")
-    ax.legend(fontsize=8)
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(fontsize=8)
     _title(ax, "Observed (dots) vs baseline predictive distribution")
     ax = fig.add_subplot(gs[2, 1])
     ax.axis("off")

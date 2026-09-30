@@ -128,7 +128,19 @@ def test_end_to_end_run_detects_injected_increase(effect_dataset, kbna,
                & (res["event_set"] == "all")].iloc[0]
     assert prim["n_events"] == len(risk[~risk["excluded"]])
     assert np.isfinite(prim["irr"]) and np.isfinite(prim["sir_post"])
-    # reuse: a second run with the same data reuses the stored baseline
+    # reuse: a second run with the same data reuses the stored baseline;
+    # this run also exercises the figures, event plots and PDFs
+    args.no_plots = False
+    args.no_event_plots = False
+    args.goaround_run = 1
     run2 = pipeline.run_all(effect_dataset, args, ["test"])
     txt = (run2 / "run_config.txt").read_text()
     assert "baseline_reused = True" in txt
+    for name in ("summary.pdf", "figures/superposed_epoch.png",
+                 "figures/forest.png", "figures/equilibrium.png",
+                 "figures/control_chart.png", "figures/encounter_density.png",
+                 "figures/ceiling_check.png"):
+        assert (run2 / name).exists(), name
+    assert len(list((run2 / "events").glob("*.png"))) == len(risk)
+    assert (base / "baseline_report.pdf").exists()
+    assert (base / "validation" / "calibration_exceedance.png").exists()
