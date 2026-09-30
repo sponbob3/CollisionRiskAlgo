@@ -29,7 +29,8 @@ COMMANDS = [
          "cd CollisionRiskAlgo",
          "Get the repository."),
         ("python3 -m venv .venv\n"
-         "source .venv/bin/activate          # Windows: .venv\\Scripts\\activate\n"
+         "source .venv/bin/activate\n"
+         "# Windows: .venv\\Scripts\\activate\n"
          "pip install -r requirements.txt",
          "Create the virtual environment (Python 3.11 or newer) and install "
          "every dependency: the same packages as the go-around pipeline plus "
@@ -44,7 +45,7 @@ COMMANDS = [
          "style state vectors for ALL traffic around the airport, columns: "
          "timestamp, icao24, callsign, latitude, longitude, altitude, "
          "geoaltitude, vertical_rate, groundspeed, track, onground. The "
-         "folder name is <ICAO>_<label>; the prefix selects "
+         "folder name is &lt;ICAO&gt;_&lt;label&gt;; the prefix selects "
          "airports/<ICAO>.yaml. datasets/ is gitignored."),
         ("python run_proximity.py check-data KBNA_2025\n"
          "python run_proximity.py check-data KBNA_2025 --limit 5",
@@ -145,6 +146,26 @@ COMMANDS = [
 ]
 
 
+MAX_CODE_COLS = 46
+
+
+def wrap_command(cmd: str) -> str:
+    """Break long shell lines at spaces with a trailing backslash so the
+    text fits the code column and still pastes as one command."""
+    out = []
+    for line in cmd.split("\n"):
+        indent = ""
+        while len(line) > MAX_CODE_COLS:
+            cut = line.rfind(" ", 0, MAX_CODE_COLS - 2)
+            if cut <= 0:
+                break
+            out.append(indent + line[:cut] + " \\")
+            line = line[cut + 1:]
+            indent = "    "
+        out.append(indent + line)
+    return "\n".join(out)
+
+
 def main() -> None:
     st = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=st["Title"], fontSize=16, alignment=0,
@@ -155,8 +176,8 @@ def main() -> None:
                         spaceBefore=12, spaceAfter=4)
     body = ParagraphStyle("body", parent=st["Normal"], fontSize=9,
                           leading=12)
-    code = ParagraphStyle("code", parent=st["Code"], fontSize=8.2,
-                          leading=10.5, backColor=colors.HexColor("#f3f2ee"),
+    code = ParagraphStyle("code", parent=st["Code"], fontSize=7.6,
+                          leading=9.8, backColor=colors.HexColor("#f3f2ee"),
                           borderPadding=4, leftIndent=0)
     story = [
         Paragraph("Proximity risk after go-arounds — terminal commands", h1),
@@ -169,8 +190,9 @@ def main() -> None:
         story.append(Paragraph(section, h2))
         rows = []
         for cmd, what in items:
-            rows.append([Preformatted(cmd, code), Paragraph(what, body)])
-        t = Table(rows, colWidths=[3.35 * inch, 3.55 * inch], hAlign="LEFT")
+            rows.append([Preformatted(wrap_command(cmd), code),
+                         Paragraph(what, body)])
+        t = Table(rows, colWidths=[3.5 * inch, 3.4 * inch], hAlign="LEFT")
         t.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.HexColor("#d8d7d2")),
