@@ -8,10 +8,13 @@ Usage:
     python run_proximity.py KBNA_2025 --goaround-run 3   # reuse detection
     python run_proximity.py KBNA_2025 --rebuild-baseline
     python run_proximity.py KBNA_2025 --baseline-only
-    python run_proximity.py new-airport KBNA          # profile + airspace
+    python run_proximity.py new-airport KBNA          # profile (optional;
+                                                      # created automatically)
+    python run_proximity.py new-airport KMCO KMCO_2025Q1  # ... using the data
     python run_proximity.py check-data KBNA_2025      # data audit only
 
-Datasets live in datasets/<ICAO>_<label>/ (daily .parquet or .csv files);
+Datasets live in datasets/<ICAO>_<label>/ (daily .parquet or .csv files,
+directly or in subfolders such as one per month);
 the ICAO prefix of the folder name selects airports/<ICAO>.yaml. Every run
 writes fresh numbered folders output/<ICAO>/goaround/run_NN/ and
 output/<ICAO>/proximity_risk/run_NN/ (same NN). Method: FRAMEWORK.md.
@@ -30,11 +33,14 @@ OUTPUT_DIR = ROOT / "output"
 
 
 def list_datasets() -> list[Path]:
+    """Dataset folders: any folder under datasets/ with daily files in it
+    or in its subfolders (e.g. one subfolder per month)."""
     if not DATASETS_DIR.exists():
         return []
     return sorted(
         d for d in DATASETS_DIR.iterdir()
-        if d.is_dir() and (any(d.glob("*.parquet")) or any(d.glob("*.csv")))
+        if d.is_dir() and not d.name.startswith(".")
+        and (any(d.rglob("*.parquet")) or any(d.rglob("*.csv")))
     )
 
 
@@ -57,23 +63,21 @@ def resolve_dataset(name: str | None) -> Path:
              f"usage: python run_proximity.py <dataset_name>")
 
 
-def cmd_new_airport(icao: str) -> None:
+def cmd_new_airport(icao: str, dataset_name: str | None) -> None:
     from proximity_pipeline import airspace
 
-    path = airspace.create_profile(icao)
-    print(f"wrote {path.relative_to(ROOT)}\n"
-          "Review it before running: set timezone, preset "
-          "(training_ga/air_carrier), terrain (flat/dem), "
-          "assume_arrivals_dataset, and VERIFY airspace.ceiling_ft_msl "
-          "against the sectional chart (pre-filled as field elevation + "
-          "4,000 ft).")
+    dataset = resolve_dataset(dataset_name) if dataset_name else None
+    airspace.create_profile(icao, dataset)
 
 
 def cmd_check_data(name: str | None, limit: int | None) -> None:
     from proximity_pipeline import airspace, loading
 
+    from proximity_pipeline import profile_setup
+
     dataset = resolve_dataset(name)
     icao = dataset.name.split("_")[0].upper()
+    profile_setup.ensure_profile(icao, dataset)
     airspace.load_airspace(icao)
     print(f"check-data: {dataset.name}  airport {icao}")
     table = loading.audit_dataset(dataset, limit=limit)
@@ -86,7 +90,8 @@ def cmd_check_data(name: str | None, limit: int | None) -> None:
 
 def main() -> None:
     if len(sys.argv) >= 3 and sys.argv[1] == "new-airport":
-        cmd_new_airport(sys.argv[2])
+        cmd_new_airport(sys.argv[2],
+                        sys.argv[3] if len(sys.argv) >= 4 else None)
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "check-data":
         ap = argparse.ArgumentParser(prog="run_proximity.py check-data")

@@ -45,7 +45,7 @@ Design principles (inherited from the go-around pipeline):
 | **window** | a fixed time interval over which metrics are aggregated (default 10 min). |
 | **exposure** | pair-hours: the summed time that aircraft pairs coexist airborne inside the study volume. The denominator of every rate. |
 | **baseline** | the airport's expected behaviour in windows unaffected by go-arounds, conditional on traffic and operating conditions (§9). |
-| **event** | one detected go-around, anchored at its climb start `t0`. |
+| **event** | one detected go-around or touch-and-go (each keeps its own name), anchored at its climb start `t0`. |
 | **pre / post window** | `[t0 − W, t0)` and `[t0, t0 + W)`, W = 10 min (sensitivity 5, 15). |
 
 "Collision risk" is not used in outputs; the literature definition (the
@@ -140,15 +140,33 @@ around the airport, with the columns used by the go-around pipeline:
 `timestamp, icao24, callsign, latitude, longitude, altitude (barometric),
 geoaltitude, vertical_rate, groundspeed, track, onground`
 
+Daily files may sit directly in the dataset folder or in subfolders (e.g.
+one per month); hidden files are ignored, and two files with the same day
+name are an error. When a file also has a position-time column
+(`last_position`, as delivered by OpenSky), it is used by the freshness
+filter (§4.2).
+
 ### 4.2 Cleaning
 
 Per aircraft, per day:
 
+- **position freshness** (both stages, go-around and proximity): OpenSky
+  state vectors repeat an aircraft's last known position for up to 300 s
+  after its last position report (on the first KMCO test day 58 % of rows
+  were such frozen copies, typically right after an arrival dropped below
+  the coverage floor, where a frozen "ghost" would otherwise sit on the
+  final approach path). Only rows that carry a new position report are
+  kept, re-timed to the time of that report; reports older than 10 s at
+  the row time are dropped;
 - drop rows without position; drop duplicate timestamps;
 - drop position jumps (implied speed > 600 kt between consecutive fixes);
 - flight legs split on 20-min gaps (same rule as the go-around pipeline);
 - smooth vertical rate with a short rolling median (7 s, as in the
-  go-around pipeline); positions are not smoothed.
+  go-around pipeline); positions are not smoothed;
+- geometric altitude that disagrees with barometric altitude by more than
+  1,000 ft beyond the leg's median offset is treated as missing (isolated
+  GNSS spikes); height above field then uses the re-referenced barometric
+  fallback.
 
 Altitude references:
 
@@ -361,7 +379,10 @@ Two sets of windows are computed:
 
 ### 8.3 Data quality per window
 
-- `interp_fraction`: share of aircraft-seconds that are interpolated;
+- `interp_fraction`: share of aircraft-seconds interpolated across report
+  gaps longer than 4 s. Filling the 1–4 s gaps that OpenSky produces
+  under heavy traffic is essentially exact and does not count (counting
+  it marked the busiest windows of the first KMCO test day as bad data);
 - `gap_count`: number of per-aircraft gaps > 10 s;
 - `outage`: any interval > 60 s with no messages from any aircraft while
   aircraft were present before and after (receiver outage);
@@ -500,20 +521,28 @@ covariates from the window.
 
 ---
 
-## 10. Go-around events
+## 10. Events: go-arounds and touch-and-goes
 
 - Source: the vendored go-around pipeline (§13), run on the same dataset.
-- Primary set: `outcome == go_around`. Sensitivity: include
-  `ga_ambiguous`.
+- Primary set: `outcome` in {`go_around`, `touch_and_go`}. A touch-and-go
+  puts an aircraft back into the terminal airspace on a climb-out just as
+  a go-around does, so both are analysed for proximity risk. Each event
+  keeps its own name (its `outcome`, its event id prefix `ga_` / `tg_`,
+  its plot title and file name); the go-around definition is unchanged.
+  When both types occur, every result is also given per type
+  (`event_set` = `go_around_only`, `touch_and_go_only`). Sensitivity:
+  include `ga_ambiguous`.
 - Anchor `t0 = climb_start_utc` (fallback `t_low_utc`).
 - Windows: pre `[t0 − 10 min, t0)`, post `[t0, t0 + 10 min)`; sensitivity
   W = 5 and 15 min.
-- **Clusters**: go-arounds within W of each other form a cluster. The
-  primary analysis uses the first go-around of each cluster (independent
+- **Clusters**: events within W of each other form a cluster. The
+  primary analysis uses the first event of each cluster (independent
   events), with cluster size recorded; a sensitivity variant drops all
   clustered events.
-- **Contaminated pre windows**: if another go-around occurred in the W
+- **Contaminated pre windows**: if another event occurred in the W
   before `t0`, the pre window is flagged.
+- The baseline exclusion (§9.1) and the matched landing controls (§9.7)
+  keep away from touch-and-goes as well as go-arounds.
 - **Quality**: events whose pre or post window is `bad` are excluded and
   listed.
 
@@ -609,6 +638,12 @@ computation.
 - Airport profiles use the same YAML format; the `airspace:` block (§3.2)
   and an optional `flows:` block (§8.4) are additions that the go-around
   loader ignores.
+- Input handling for BOTH stages comes from the adapter: `data_files()`
+  (daily files in subfolders) and `load_day()` (the vendored loader plus
+  the position-freshness filter, §4.2). The go-around stage gets them for
+  the duration of its run, without editing the vendored files. On files
+  without a position-time column `load_day()` is the vendored loader
+  exactly, so parity with GoAroundAlgo (test 8) holds.
 - Updating the vendored copy later = replace the folder, update
   `VENDORED_FROM.txt`, re-run the test suite.
 
@@ -645,11 +680,43 @@ metrics, (4) analyses every event, (5) runs the sensitivity sweep,
 Sub-commands:
 
 ```bash
-python run_proximity.py new-airport KBNA      # profile incl. airspace block
-python run_proximity.py check-data KBNA_2025  # data audit only
+python run_proximity.py new-airport KMCO KMCO_2025Q1  # profile only (optional)
+python run_proximity.py check-data KMCO_2025Q1        # data audit only
 ```
 
-`check-data` reports: days found, columns present, per-day message counts,
+**Automatic airport profiles** (`proximity_pipeline/profile_setup.py`).
+When `airports/<ICAO>.yaml` does not exist, the run (or `check-data`)
+creates it with no manual editing:
+
+- geometry (name, reference point, elevation, open runways with threshold
+  coordinates; true bearing = geodesic azimuth between the two ends) from
+  the OurAirports database (ourairports.com, falling back to its GitHub
+  mirror), cached in `airports/.ourairports/`;
+- `timezone` from the airport coordinates (timezonefinder);
+- `preset` from the data: median groundspeed on final approach
+  (descending within 4 NM, 200–1,500 ft above field, up to 5 days spread
+  over the dataset); ≥ 100 kt → `air_carrier`, else `training_ga`.
+  Without data: the OurAirports airport type;
+- `assume_arrivals_dataset` from the data: if fewer than half of the
+  tracks that end low (< 1,000 ft) near the field (< 3 NM) show on-ground
+  samples at their end, landings are not seen on the ground and a track
+  ending low near the field is treated as a landing;
+- the ADS-B coverage floor near the field (P90 of those last-seen heights
+  + 100 ft, rounded up to 50 ft): when above the go-around pipeline's
+  landing-truncation heights, `END_TRUNCATED_MAX_AGL_FT` and
+  `TRUNCATED_FINAL_MAX_AGL_FT` are raised to it in the profile's
+  `overrides` (capped at 1,200 ft). On the first KMCO test day coverage
+  ended at ~530 ft above field and every landing was `unresolved` without
+  this;
+- the `airspace:` block (field elevation + 4,000 ft, §3.2).
+
+Every detected value is printed and written into the profile with the
+evidence it came from. The profile is the single place to change any of
+them and is never overwritten (delete it to regenerate). An existing
+profile without an `airspace:` block gets the default block added.
+
+`check-data` reports: days found, columns present, the share of stale
+(repeated-position) rows removed, per-day message counts,
 aircraft counts, coverage gaps/outages, altitude-reference availability, and
 whether the data volume meets the baseline minimum.
 
@@ -712,7 +779,7 @@ output/KBNA/
       equilibrium.csv
       sensitivity.csv
       figures/
-      events/                      one PNG per go-around
+      events/                      one PNG per go-around / touch-and-go
       summary.pdf
 ```
 
@@ -726,7 +793,7 @@ panels; every axis is labelled with units; colours are consistent across
 all figures (pre, post, baseline, and the three tiers each have one fixed
 colour).
 
-### 16.1 Per event (`events/<t0>_<callsign>_<runway>.png`)
+### 16.1 Per event (`events/<outcome>_<t0>_<callsign>_<runway>.png`)
 
 One page, three rows:
 
@@ -778,6 +845,10 @@ error-growth curves.
 | `AIRBORNE_MIN_GS_KT` | 50 |
 | `MAX_INTERP_GAP_S` | 10 |
 | `MAX_IMPLIED_SPEED_KT` | 600 |
+| `POSITION_FRESHNESS_FILTER` / `MAX_POSITION_AGE_S` | on / 10 |
+| `GEO_BARO_MAX_DEV_FT` | 1,000 |
+| `QUALITY_INTERP_GAP_S` | 4 |
+| `EVENT_OUTCOMES` | go_around, touch_and_go |
 | tiers (H, V) | T1 3 NM/1,000 ft · T2 0.5 NM/500 ft · T3 500 ft/100 ft |
 | `T_LOOKAHEAD_S` | 120 |
 | `EPISODE_MERGE_GAP_S` | 10 |
@@ -814,6 +885,14 @@ The method must be shown to work on data where the answer is known:
    small fixture.
 9. **Traffic cross-check**: `validate_cpa.py` closest-approach distances
    agree with the traffic library on sample days.
+10. **Input handling**: daily files are found in month subfolders; a
+    synthetic day with injected frozen-position ghost rows loads
+    identically to the clean day; re-timing to the report time is exact.
+11. **Events**: touch-and-goes enter the event set with their own name,
+    and landing controls keep away from them.
+12. **Automatic profile**: created offline from a stubbed OurAirports
+    database and the synthetic data (timezone, preset, arrivals
+    assumption, runways, airspace block), never overwritten.
 
 ---
 

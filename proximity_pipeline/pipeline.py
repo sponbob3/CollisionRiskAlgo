@@ -33,7 +33,7 @@ from . import config
 from . import goaround_adapter as ga
 from . import loading, pairs, probability
 
-CACHE_VERSION = 2
+CACHE_VERSION = 4
 
 # proximity parameters that change the per-day computation
 DAY_PARAMS = (
@@ -47,6 +47,8 @@ DAY_PARAMS = (
     "ERROR_MODEL_TAU_STEP_S", "ERROR_MODEL_SAMPLES_PER_DAY",
     "CEILING_CAP_FT_AGL", "CEILING_BUFFER_FT", "CEILING_SENSITIVITY_FT_AGL",
     "VOLUME_RADIUS_NM", "VOLUME_RADIUS_SENSITIVITY_NM", "RANDOM_SEED",
+    "POSITION_FRESHNESS_FILTER", "POSITION_TIME_COLUMNS",
+    "MAX_POSITION_AGE_S", "GEO_BARO_MAX_DEV_FT", "QUALITY_INTERP_GAP_S",
 )
 GA_DAY_PARAMS = ("AIRPORT_ICAO", "AIRPORT_LATLON", "FIELD_ELEVATION_FT",
                  "RUNWAYS", "TERRAIN_MODE")
@@ -143,6 +145,8 @@ def process_day(path: Path, cache_dir: Path) -> dict:
         "date": f"{dg.date:%Y-%m-%d}",
         "t0": dg.t0,
         "n_raw": int(dg.n_raw),
+        "n_rows_in_file": int(dg.n_rows_in_file),
+        "stale_position_share": round(float(dg.stale_share), 4),
         "n_dropped_jumps": int(dg.n_dropped_jumps),
         "n_legs": int(len(dg.legs)),
         "n_grid_rows": int(len(dg.grid)),
@@ -153,6 +157,7 @@ def process_day(path: Path, cache_dir: Path) -> dict:
         "n_gaps": int(len(dg.gaps)),
         "outages": [[int(a), int(b)] for a, b in outs],
         "interp_share": float(dg.grid["interpolated"].mean()),
+        "interp_long_share": float(dg.grid["interp_long"].mean()),
         "elapsed_s": round(time.time() - t_start, 2),
     }
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -397,6 +402,14 @@ def analyse(days: dict, app: pd.DataFrame, spec, error_model, ev: pd.DataFrame,
         in_ctl = r[r[f"pre_{S.PRIMARY}_in_control"].fillna(False).astype(bool)]
         if len(in_ctl):
             results.append(S.primary_results(in_ctl, b, scope, "in_control_pre", reps))
+        # per event type (go-arounds only, touch-and-goes only) when the
+        # event set mixes types
+        if "outcome" in r.columns and r["outcome"].nunique() > 1:
+            for typ in config.EVENT_TYPE_BREAKDOWN:
+                sub = r[r["outcome"] == typ]
+                if len(sub):
+                    results.append(S.primary_results(sub, b, scope,
+                                                     f"{typ}_only", reps))
     results = pd.concat(results, ignore_index=True)
     epoch = S.superposed_epoch(ev.assign(day=risk["day"].to_numpy()) if len(ev) else ev,
                                exp, enc, wm, bl, S.PRIMARY, reps, config.RANDOM_SEED)
@@ -427,6 +440,8 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
     dataset = Path(dataset)
     icao, label = dataset.name.split("_", 1)
     icao = icao.upper()
+    from . import profile_setup
+    profile_setup.ensure_profile(icao, dataset)
     airspace.load_airspace(icao)
     window_min = args.window or config.WINDOW_MIN
     outcomes = (config.EVENT_OUTCOMES_AMBIGUOUS if args.include_ambiguous
@@ -487,8 +502,9 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
         run_dir / "ceiling_check.csv", index=False)
     effective = chk["effective_ceiling_ft_agl"]
     spec = W.default_spec(effective)
-    print(f"events: {len(ev)} go-arounds ({len(ev[ev['cluster_first']])} "
-          f"cluster-first), {len(ctl)} matched landing controls")
+    print(f"events: {E.event_count_text(ev)} "
+          f"({len(ev[ev['cluster_first']])} cluster-first), {len(ctl)} "
+          f"matched landing controls")
 
     # 4. error model (section 7.1)
     err = pd.concat([dc.errors for dc in days.values()], ignore_index=True)

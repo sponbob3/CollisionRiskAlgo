@@ -23,17 +23,24 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # put daily .parquet/.csv files of ALL traffic around the airport in
-# datasets/<ICAO>_<label>/   e.g. datasets/KBNA_2025/
-python run_proximity.py check-data KBNA_2025      # audit the data first
-python run_proximity.py KBNA_2025                 # the whole analysis
+# datasets/<ICAO>_<label>/ (directly or in subfolders, e.g. one per month)
+#   e.g. datasets/KMCO_2025Q1/2025-01/KMCO_20250101.parquet
+python run_proximity.py check-data KMCO_2025Q1    # audit the data first
+python run_proximity.py KMCO_2025Q1               # the whole analysis
 ```
+
+The airport profile is created automatically on the first run (see
+below); nothing has to be edited by hand. Events are go-arounds and
+touch-and-goes: both put an aircraft back into the airspace on a
+climb-out, so both are analysed; each keeps its own name in every table
+and plot, and results are also given per type.
 
 One run writes two fresh numbered folders with the same number:
 
 | folder | content |
 |---|---|
 | `output/KBNA/goaround/run_NN/` | the exact outputs of the go-around pipeline (`all_approaches.csv`, `go_around_events.csv`, `summary.pdf`, per-event plots, `run_config.txt`) |
-| `output/KBNA/proximity_risk/run_NN/` | `summary.pdf` (verdicts on page 1), `results_primary.csv` (IRR / SIR per endpoint and scope), `go_around_risk.csv` (one row per go-around), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around), `run_config.txt` |
+| `output/KBNA/proximity_risk/run_NN/` | `summary.pdf` (verdicts on page 1), `results_primary.csv` (IRR / SIR per endpoint and scope), `go_around_risk.csv` (one row per go-around or touch-and-go), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around or touch-and-go), `run_config.txt` |
 | `output/KBNA/proximity_risk/baseline/<label>/` | the stored, validated baseline (`baseline.json`, `baseline_windows.parquet`, `error_model.csv`, `phase1_removed.csv`, `validation/`, `baseline_report.pdf`), reused automatically while the data and parameters match |
 
 Every command and option, with examples, is in **TERMINAL_COMMANDS.pdf**
@@ -72,12 +79,24 @@ pairwise computation.
 
 `airports/<ICAO>.yaml` is the go-around pipeline's profile plus an
 `airspace:` block (charted ceiling, radius, ceiling mode) and an optional
-`flows:` block. `python run_proximity.py new-airport KBNA` generates it
-from the OurAirports database with the ceiling pre-filled as field
-elevation + 4,000 ft; verify it against the sectional chart, set the
-timezone and preset, and review the runway list. `airports/KBNA.yaml`
-(Nashville, Class C, air-carrier preset, ceiling 4,600 ft MSL) is the
-first airport.
+`flows:` block. When it does not exist, the first run creates it
+automatically (`proximity_pipeline/profile_setup.py`, FRAMEWORK.md
+section 14): runways and elevation from the OurAirports database
+(downloaded once), timezone from the coordinates, preset
+(air_carrier / training_ga) from final-approach speeds in the data,
+`assume_arrivals_dataset` from whether landings are seen on the ground,
+the ADS-B coverage floor near the field (raises the go-around pipeline's
+landing-truncation heights when coverage ends high), and the ceiling at
+field elevation + 4,000 ft (checked against the data every run). Every
+detected value is printed and written into the file with its evidence;
+the file is the one place to change any of them and is never overwritten.
+`python run_proximity.py new-airport KMCO KMCO_2025Q1` creates it without
+running the analysis.
+
+OpenSky state vectors repeat an aircraft's last position for up to 300 s
+after its last position report; when the files carry the `last_position`
+column, those frozen rows are dropped and positions are re-timed to their
+report time before either stage runs (FRAMEWORK.md section 4.2).
 
 ## Repository layout
 

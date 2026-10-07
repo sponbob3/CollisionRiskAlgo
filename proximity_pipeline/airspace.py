@@ -18,7 +18,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
 from . import config
 from . import goaround_adapter as ga
@@ -205,38 +204,11 @@ def ceiling_check_lines(chk: dict) -> list[str]:
     return lines
 
 
-def create_profile(icao: str) -> Path:
-    """new-airport: generate the go-around profile via the vendored
-    generator, then append the airspace block with the ceiling pre-filled
-    as field elevation + 4,000 ft (standard Class C), to be verified
-    against the sectional chart."""
-    icao = icao.upper()
-    path = ga.create_profile(icao)
-    with open(path) as f:
-        prof = yaml.safe_load(f)
-    elev = float(prof["elevation_ft"])
-    ceiling = int(round((elev + 4000.0) / 100.0) * 100)
-    block = [
-        "",
-        "# Study volume for the proximity-risk pipeline (FRAMEWORK.md "
-        "section 3).",
-        "# The go-around pipeline ignores this block.",
-        "airspace:",
-        "  class: C                   # EDIT: B / C / D (informational)",
-        f"  ceiling_ft_msl: {ceiling}       # PRE-FILLED as field elevation "
-        f"({elev:.0f} ft) + 4,000 ft;",
-        "                             # VERIFY AGAINST THE SECTIONAL CHART",
-        "  radius_nm: 10",
-        "  ceiling_mode: auto         # auto | fixed   (section 3.3)",
-        "",
-        "# Optional runway-flow labels (FRAMEWORK.md section 8.4), e.g.",
-        "#   flows:",
-        '#     north: ["02L", "02R"]',
-        '#     south: ["20L", "20R"]',
-        "# Without this block flows are derived automatically from runway "
-        "headings.",
-        "",
-    ]
-    text = path.read_text().rstrip("\n") + "\n" + "\n".join(block)
-    path.write_text(text)
+def create_profile(icao: str, dataset: Path | None = None) -> Path:
+    """new-airport: generate the full profile automatically (geometry,
+    timezone, preset, arrivals assumption, airspace block); see
+    profile_setup.py."""
+    from . import profile_setup
+    path, lines = profile_setup.create_profile(icao, dataset)
+    print("\n".join(lines))
     return path

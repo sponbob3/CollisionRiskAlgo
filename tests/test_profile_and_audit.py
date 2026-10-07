@@ -1,9 +1,9 @@
 """Scaffolding tests: profile + airspace block, ceiling sanity check,
-new-airport generation (stubbed airport database), check-data audit."""
+automatic airport profile (stubbed airport database), check-data audit."""
 
 from __future__ import annotations
 
-import types
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -76,34 +76,69 @@ def test_ceiling_check_decisions(kbna):
         config.AIRSPACE_CEILING_MODE = saved
 
 
-def test_new_airport_appends_airspace_block(kbna, tmp_path, monkeypatch):
-    """new-airport = the vendored generator + the airspace block with the
-    ceiling pre-filled as field elevation + 4,000 ft. The OurAirports
-    lookup is stubbed so the test needs no network."""
-    from goaround_pipeline import profiles
+def _fake_ourairports(cache: Path) -> None:
+    """A two-row OurAirports database (KBNA, one runway pair) so that the
+    automatic profile needs no network."""
+    cache.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([{
+        "id": 1, "ident": "KBNA", "type": "large_airport",
+        "name": "Nashville International Airport", "latitude_deg": 36.1245,
+        "longitude_deg": -86.6782, "elevation_ft": 599,
+        "scheduled_service": "yes", "gps_code": "KBNA"}]).to_csv(
+        cache / "airports.csv", index=False)
+    pd.DataFrame([{
+        "airport_ident": "KBNA", "closed": 0,
+        "le_ident": "02L", "le_latitude_deg": 36.11769867,
+        "le_longitude_deg": -86.68650055,
+        "he_ident": "20R", "he_latitude_deg": 36.13779831,
+        "he_longitude_deg": -86.6785965}, {
+        "airport_ident": "KBNA", "closed": 1,
+        "le_ident": "09", "le_latitude_deg": 36.12,
+        "le_longitude_deg": -86.69,
+        "he_ident": "27", "he_latitude_deg": 36.12,
+        "he_longitude_deg": -86.67}]).to_csv(cache / "runways.csv",
+                                             index=False)
 
-    rwy = pd.DataFrame({"name": ["09", "27"],
-                        "latitude": [40.0, 40.0],
-                        "longitude": [-100.02, -99.98],
-                        "bearing": [90.0, 270.0]})
-    apt = types.SimpleNamespace(name="Test Field", latlon=(40.0, -100.0),
-                                altitude=1234.0,
-                                runways=types.SimpleNamespace(data=rwy))
-    fake_traffic_data = types.SimpleNamespace(airports={"KTST": apt})
-    monkeypatch.setitem(__import__("sys").modules, "traffic.data",
-                        fake_traffic_data)
-    monkeypatch.setattr(profiles, "AIRPORTS_DIR", tmp_path)
-    monkeypatch.setattr(airspace, "AIRPORTS_DIR", tmp_path)
 
-    path = airspace.create_profile("KTST")
-    text = path.read_text()
-    assert "airspace:" in text and "ceiling_mode: auto" in text
-    assert "ceiling_ft_msl: 5200" in text        # 1234 + 4000 -> 5200
-    assert "VERIFY AGAINST THE SECTIONAL" in text
+def test_automatic_profile(kbna, synth_dataset, tmp_path, monkeypatch):
+    """A missing profile is created with no manual input: geometry from
+    the (stubbed) OurAirports database, timezone from the coordinates,
+    preset and arrivals assumption from the data, airspace block."""
+    from proximity_pipeline import profile_setup as ps
     import yaml
-    prof = yaml.safe_load(text)
-    assert prof["airspace"]["radius_nm"] == 10
-    assert prof["runways"]["09"][2] == 90.0
+    _fake_ourairports(tmp_path / ".ourairports")
+    monkeypatch.setattr(ps, "OA_CACHE", tmp_path / ".ourairports")
+    monkeypatch.setattr(ps, "AIRPORTS_DIR", tmp_path)
+
+    path, lines = ps.create_profile("KBNA", synth_dataset)
+    prof = yaml.safe_load(path.read_text())
+    assert prof["timezone"] == "America/Chicago"
+    # synthetic finals are flown at ~140 kt -> air carrier
+    assert prof["preset"] == "air_carrier"
+    # synthetic landings roll out on the ground -> touchdown evidence
+    # decides, no arrivals assumption, no coverage-floor overrides
+    assert prof["assume_arrivals_dataset"] is False
+    assert prof["overrides"] == {}
+    assert set(prof["runways"]) == {"02L", "20R"}      # closed 09/27 skipped
+    b02, b20 = prof["runways"]["02L"][2], prof["runways"]["20R"][2]
+    assert abs(b02 - 17.7) < 0.5 and abs(b20 - 197.7) < 0.5
+    assert prof["airspace"]["ceiling_ft_msl"] == 4600
+    assert prof["airspace"]["ceiling_mode"] == "auto"
+    assert any("preset: air_carrier" in x for x in lines)
+    with pytest.raises(FileExistsError):
+        ps.create_profile("KBNA", synth_dataset)       # never overwritten
+
+
+def test_ensure_profile_adds_missing_airspace_block(tmp_path, monkeypatch):
+    from proximity_pipeline import profile_setup as ps
+    import yaml
+    monkeypatch.setattr(ps, "AIRPORTS_DIR", tmp_path)
+    (tmp_path / "KTST.yaml").write_text(
+        "icao: KTST\nname: Test\nlatitude: 40.0\nlongitude: -100.0\n"
+        "elevation_ft: 1234.0\nruns: {}\n")
+    ps.ensure_profile("KTST")
+    prof = yaml.safe_load((tmp_path / "KTST.yaml").read_text())
+    assert prof["airspace"]["ceiling_ft_msl"] == 5200   # 1234 + 4000
 
 
 def test_check_data_audit(synth_dataset, kbna):

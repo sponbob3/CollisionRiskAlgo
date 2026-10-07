@@ -167,7 +167,10 @@ def baseline_figures(bl, calib: dict, em_table: pd.DataFrame,
 
 # --------------------------------------------------- study figures -------
 
-def fig_epoch(epoch: pd.DataFrame, out: Path, n_events: int) -> None:
+EV = "go-around / touch-and-go"       # the event category in labels
+
+
+def fig_epoch(epoch: pd.DataFrame, out: Path, count_text: str) -> None:
     fig, ax = plt.subplots(figsize=(9, 3.8))
     if len(epoch):
         ok = epoch["expected"] > 0
@@ -180,12 +183,12 @@ def fig_epoch(epoch: pd.DataFrame, out: Path, n_events: int) -> None:
     ax.axvline(0, color=INK, lw=1)
     ax.axvspan(-config.WINDOW_MIN, 0, color=PRE, alpha=0.06, lw=0)
     ax.axvspan(0, config.WINDOW_MIN, color=POST, alpha=0.06, lw=0)
-    ax.set_xlabel("minutes from go-around climb start")
+    ax.set_xlabel(f"minutes from {EV} climb start")
     ax.set_ylabel("T1 encounter rate, observed / expected")
     ax.set_ylim(bottom=0)
     ax.legend(fontsize=8, loc="upper left")
-    _title(ax, f"Superposed epoch of T1 encounters around {n_events} "
-               "go-arounds (shaded: pre | post windows)")
+    _title(ax, f"Superposed epoch of T1 encounters around {count_text} "
+               "(shaded: pre | post windows)")
     _save(fig, out)
 
 
@@ -204,16 +207,26 @@ def _log_axis(ax, values):
 
 
 def fig_forest(results: pd.DataFrame, out: Path) -> None:
-    r = results[(results["event_set"] == "all") & (results["type"] == "count")]
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.4), sharey=True)
+    # every count endpoint for all events, plus the primary endpoint per
+    # event type (go-arounds only / touch-and-goes only) when both occur
+    typ_sets = [f"{t}_only" for t in config.EVENT_TYPE_BREAKDOWN]
+    r = results[(results["type"] == "count")
+                & ((results["event_set"] == "all")
+                   | (results["event_set"].isin(typ_sets)
+                      & (results["endpoint"] == PRIMARY_METRIC)))]
+    n_rows = len(r)
+    fig, axes = plt.subplots(1, 2, figsize=(11, 1.6 + 0.32 * max(n_rows, 8)),
+                             sharey=True)
     labels, y, ticks = [], 0, []
     vals0, vals1 = [], []
     for scope, name in (("airspace", "airspace-wide"),
-                        ("ga_involved", "go-around-involved")):
+                        ("ga_involved", f"{EV} aircraft")):
         sub = r[r["scope"] == scope]
         for _, row in sub.iterrows():
             ticks.append(y)
-            labels.append(f"{name}: {row['endpoint']}")
+            only = ("" if row["event_set"] == "all" else
+                    f" ({row['event_set'].replace('_only', '').replace('_', '-')}s only)")
+            labels.append(f"{name}: {row['endpoint']}{only}")
             if np.isfinite(row["irr"]) and row["irr"] > 0:
                 axes[0].errorbar(
                     row["irr"], y,
@@ -290,7 +303,7 @@ def fig_control_chart(bl, wm: pd.DataFrame, risk: pd.DataFrame,
     for w, col, m in (("pre", PRE, "v"), ("post", POST, "^")):
         zz = r[f"{w}_{PRIMARY_METRIC}_z"]
         tt = pd.to_datetime(r["t0"], unit="s", utc=True)
-        ax.plot(tt, zz, m, color=col, ms=6, label=f"go-around {w} window")
+        ax.plot(tt, zz, m, color=col, ms=6, label=f"event {w} window")
     ax.set_ylabel("z-score of T1 encounters vs baseline")
     ax.set_xlabel("date (UTC)")
     ax.legend(fontsize=8, ncol=5, loc="upper left")
@@ -300,7 +313,7 @@ def fig_control_chart(bl, wm: pd.DataFrame, risk: pd.DataFrame,
 
 
 def fig_density(enc: pd.DataFrame, risk: pd.DataFrame, out: Path) -> None:
-    """Where encounters happen: baseline vs post-go-around density."""
+    """Where encounters happen: baseline vs post-event density."""
     e = enc[(enc["tier"] == "T1") & (enc["kind"] == "any")
             & enc["inside_ceiling"]]
     w = config.WINDOW_MIN * 60
@@ -322,7 +335,7 @@ def fig_density(enc: pd.DataFrame, risk: pd.DataFrame, out: Path) -> None:
     for ax, h, n, title in ((axes[0], hb, int((~near).sum()),
                              "baseline windows"),
                             (axes[1], hp, int(post.sum()),
-                             "post-go-around windows")):
+                             f"post-{EV} windows")):
         im = ax.imshow(h.T, origin="lower", extent=[-R, R, -R, R], cmap=SEQ,
                        vmin=0, vmax=vmax)
         _draw_runways_xy(ax)
@@ -339,20 +352,43 @@ def fig_density(enc: pd.DataFrame, risk: pd.DataFrame, out: Path) -> None:
     plt.close(fig)
 
 
-def _draw_runways_xy(ax):
+def _runway_segments():
+    """Each physical runway once, threshold to threshold: every end is
+    paired with the reciprocal end that lies on its own extended
+    centreline (smallest cross-track offset), so close parallel runways
+    (e.g. four parallels) are not cross-connected."""
     from .geometry import runway_table
-    from .loading import project
     names, tx, ty, brg = runway_table()
-    drawn = set()
-    for i, n in enumerate(names):
-        for j, m in enumerate(names):
-            if j <= i or (i, j) in drawn:
+    used, segs = set(), []
+    for i in range(len(names)):
+        if i in used:
+            continue
+        b = np.radians(brg[i])
+        ux, uy = np.sin(b), np.cos(b)
+        best, best_x = None, 0.15          # NM: max offset of a true pair
+        for j in range(len(names)):
+            if j == i or j in used:
                 continue
-            if abs((brg[i] - brg[j] + 360) % 360 - 180) < 15 and \
-                    np.hypot(tx[i] - tx[j], ty[i] - ty[j]) < 4:
-                ax.plot([tx[i], tx[j]], [ty[i], ty[j]], lw=3, color="0.35",
-                        solid_capstyle="butt", zorder=3)
-                drawn.add((i, j))
+            if abs((brg[i] - brg[j] + 360) % 360 - 180) >= 15:
+                continue
+            dx, dy = tx[j] - tx[i], ty[j] - ty[i]
+            along = dx * ux + dy * uy
+            cross = abs(dx * uy - dy * ux)
+            if 0 < along < 4 and cross < best_x:
+                best, best_x = j, cross
+        used.add(i)
+        if best is not None:
+            used.add(best)
+            segs.append((i, best))
+    return names, tx, ty, segs
+
+
+def _draw_runways_xy(ax):
+    names, tx, ty, segs = _runway_segments()
+    for i, j in segs:
+        ax.plot([tx[i], tx[j]], [ty[i], ty[j]], lw=3, color="0.35",
+                solid_capstyle="butt", zorder=3)
+    for i, n in enumerate(names):
         ax.annotate(n, (tx[i], ty[i]), fontsize=6, color="0.35", zorder=4)
 
 
@@ -388,7 +424,7 @@ def fig_ceiling(heights: pd.DataFrame, chk: dict, out: Path) -> None:
     fig, ax = plt.subplots(figsize=(8, 3.8))
     if len(h):
         ax.hist(h, bins=20, color=PRE, edgecolor=SURFACE,
-                label="go-around aircraft: max height in post window")
+                label=f"{EV} aircraft: max height in post window")
     ax.axvline(chk["charted_ceiling_ft_agl"], color=BASE, lw=1.5, ls="--",
                label=f"charted ceiling ({chk['charted_ceiling_ft_agl']:.0f} ft)")
     if chk["override"]:
@@ -399,9 +435,9 @@ def fig_ceiling(heights: pd.DataFrame, chk: dict, out: Path) -> None:
         ax.axvline(chk["p95_ga_max_height_ft_agl"], color=INK, lw=1, ls=":",
                    label="95th percentile")
     ax.set_xlabel("height above field (ft)")
-    ax.set_ylabel("go-around events")
+    ax.set_ylabel("events")
     ax.legend(fontsize=8)
-    _title(ax, "Ceiling check: does the volume contain the go-around "
+    _title(ax, f"Ceiling check: does the volume contain the {EV} "
                "climb-outs?")
     _save(fig, out)
 
@@ -410,7 +446,9 @@ def study_figures(res: dict, chk: dict, ev: pd.DataFrame, figdir: Path,
                   sens: pd.DataFrame | None = None) -> None:
     figdir.mkdir(parents=True, exist_ok=True)
     risk = res["risk"]
-    fig_epoch(res["epoch"], figdir / "superposed_epoch.png", len(ev))
+    from .events import event_count_text
+    fig_epoch(res["epoch"], figdir / "superposed_epoch.png",
+              event_count_text(ev))
     fig_forest(res["results"], figdir / "forest.png")
     eq = res["equilibrium"]
     eq_air = eq[eq["scope"] == "airspace"].iloc[0].to_dict() if len(eq) else {}
@@ -429,8 +467,9 @@ def study_figures(res: dict, chk: dict, ev: pd.DataFrame, figdir: Path,
 # ------------------------------------------------------ per event -------
 
 def event_plots(res: dict, ev: pd.DataFrame, days: dict, outdir: Path) -> None:
-    """One PNG per go-around: maps pre | post, timeline, and the pre and
-    post values against the baseline predictive distribution."""
+    """One PNG per event (go-around or touch-and-go): maps pre | post,
+    timeline, and the pre and post values against the baseline predictive
+    distribution."""
     from .loading import build_day_grid
     outdir.mkdir(parents=True, exist_ok=True)
     risk = res["risk"].set_index("event_id")
@@ -460,6 +499,8 @@ def event_plots(res: dict, ev: pd.DataFrame, days: dict, outdir: Path) -> None:
 
 
 def _plot_event(e, r, g, legs, enc, bl, spec, w, outdir):
+    from .events import event_label
+    label = event_label(e["outcome"])
     t0 = int(e["t0"])
     R = spec.radius_nm
     fig = plt.figure(figsize=(11, 12))
@@ -491,12 +532,14 @@ def _plot_event(e, r, g, legs, enc, bl, spec, w, outdir):
         ax.set_aspect("equal"); ax.set_xlim(-R - 1, R + 1); ax.set_ylim(-R - 1, R + 1)
         ax.set_xlabel("east of airport (NM)"); ax.set_ylabel("north (NM)")
         ax.grid(False)
-        n_ac = win["leg"].nunique()
-        _title(ax, f"{name} window ({config.WINDOW_MIN:g} min): {n_ac} aircraft, "
-                   f"{len(ee)} encounters")
+        in_vol = win[(win["r"] <= R) & (win["h"] <= spec.ceiling_ft)]
+        n_ac = legs.loc[legs.index.intersection(in_vol["leg"].unique()),
+                        "icao24"].nunique()
+        _title(ax, f"{name} window ({config.WINDOW_MIN:g} min): {n_ac} aircraft "
+                   f"in volume, {len(ee)} encounters")
         for tier in ("T1", "T2", "T3"):
             ax.plot([], [], color=TIER[tier], lw=2, label=f"{tier} encounter")
-        ax.plot([], [], color=colr, lw=2, label="go-around aircraft")
+        ax.plot([], [], color=colr, lw=2, label=f"{label} aircraft")
         ax.legend(fontsize=7, loc="upper right")
     # ---- row 2: timeline
     ax = fig.add_subplot(gs[1, :])
@@ -553,6 +596,11 @@ def _plot_event(e, r, g, legs, enc, bl, spec, w, outdir):
     ax.set_ylabel("baseline probability")
     if ax.get_legend_handles_labels()[0]:
         ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "no aircraft pairs in the volume in either window:\n"
+                "expected count is 0, nothing to score",
+                transform=ax.transAxes, ha="center", va="center",
+                fontsize=9, color=MUTED)
     _title(ax, "Observed (dots) vs baseline predictive distribution")
     ax = fig.add_subplot(gs[2, 1])
     ax.axis("off")
@@ -561,12 +609,13 @@ def _plot_event(e, r, g, legs, enc, bl, spec, w, outdir):
                   loc="center", cellLoc="center")
     tb.auto_set_font_size(False); tb.set_fontsize(9); tb.scale(1, 1.6)
     _title(ax, "Primary metric against the baseline")
-    fig.suptitle(f"GO-AROUND {e['callsign']} ({e['icao24']})  rwy {e['runway']}"
+    fig.suptitle(f"{label.upper()} {e['callsign']} ({e['icao24']})  rwy {e['runway']}"
                  f"  {e['t0_utc']:%Y-%m-%d %H:%M:%S}Z   pre z "
                  f"{r.get(f'pre_{PRIMARY_METRIC}_z', np.nan):.2f}, post z "
                  f"{r.get(f'post_{PRIMARY_METRIC}_z', np.nan):.2f}",
                  fontsize=11)
-    name = f"{e['t0_utc']:%Y%m%d_%H%M%S}Z_{e['callsign']}_{e['runway']}.png"
+    name = (f"{e['outcome']}_{e['t0_utc']:%Y%m%d_%H%M%S}Z_{e['callsign']}_"
+            f"{e['runway']}.png")
     fig.tight_layout()
     fig.savefig(outdir / name, dpi=110)
     plt.close(fig)

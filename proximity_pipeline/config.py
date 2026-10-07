@@ -54,6 +54,21 @@ CEILING_SENSITIVITY_FT_AGL = (2500.0, 5000.0, 10000.0)
 LOAD_RADIUS_NM = 25.0
 
 # ----------------------------------------------------- data preparation ----
+# Position freshness (section 4.2). OpenSky state vectors repeat an
+# aircraft's last known position for up to 300 s after its last position
+# report, so many rows can be frozen copies of an old position (on the
+# first KMCO test day: 58% of rows). When a file has a position-time
+# column, only rows carrying a NEW position report are kept, re-timed to
+# the report time; reports older than MAX_POSITION_AGE_S at the row time
+# are dropped too. Applied to both stages (go-around and proximity).
+POSITION_FRESHNESS_FILTER = True
+POSITION_TIME_COLUMNS = ("last_position", "lastposupdate", "time_position")
+MAX_POSITION_AGE_S = 10.0
+# Geometric altitude that disagrees with barometric altitude by more than
+# this (after removing the leg's median geo-baro offset) is treated as
+# missing; height above field then falls back to re-referenced barometric
+# altitude (section 4.2). Catches isolated GNSS altitude spikes.
+GEO_BARO_MAX_DEV_FT = 1000.0
 # Airborne = onground false AND groundspeed at/above this (section 4.3).
 AIRBORNE_MIN_GS_KT = 50.0
 # Position fixes implying a speed above this between consecutive samples
@@ -149,6 +164,12 @@ FLOW_AUTO_HEADING_DEG = 30.0
 # ------------------------------------------------------ data quality ----
 # Per-window quality (section 8.3).
 QUALITY_GAP_MIN_S = 10.0             # a per-aircraft gap counts above this
+# The interpolation share used for quality counts only seconds filled
+# across report gaps LONGER than this. Under heavy traffic OpenSky reports
+# positions every ~2 s instead of every 1 s (KMCO test day: 2-4 s gaps
+# were two thirds of all interpolated seconds); filling those is
+# essentially exact and must not mark busy windows as poor data.
+QUALITY_INTERP_GAP_S = 4.0
 QUALITY_OUTAGE_MIN_S = 60.0          # receiver outage: silence above this
 QUALITY_DEGRADED_INTERP_FRAC = 0.20  # degraded above this interp share
 QUALITY_BAD_INTERP_FRAC = 0.40       # bad above this interp share
@@ -202,9 +223,23 @@ SENSITIVITY_BOOTSTRAP_REPS = 500
 RANDOM_SEED = 20250101
 
 # -------------------------------------------------------------- events ----
-# Primary set: outcome == go_around; --include-ambiguous adds ga_ambiguous.
-EVENT_OUTCOMES = ("go_around",)
-EVENT_OUTCOMES_AMBIGUOUS = ("go_around", "ga_ambiguous")
+# Events are go-arounds AND touch-and-goes: both put an aircraft back into
+# the terminal airspace on a climb-out instead of landing, so both are
+# analysed for proximity risk. They keep their own names (outcome column,
+# plot titles, per-type result rows); the go-around definition itself is
+# unchanged. --include-ambiguous adds ga_ambiguous.
+EVENT_OUTCOMES = ("go_around", "touch_and_go")
+EVENT_OUTCOMES_AMBIGUOUS = ("go_around", "touch_and_go", "ga_ambiguous")
+EVENT_LABELS = {"go_around": "go-around", "touch_and_go": "touch-and-go",
+                "ga_ambiguous": "ambiguous go-around"}
+EVENT_LABELS_PLURAL = {"go_around": "go-arounds",
+                       "touch_and_go": "touch-and-goes",
+                       "ga_ambiguous": "ambiguous go-arounds"}
+EVENT_ID_PREFIX = {"go_around": "ga", "touch_and_go": "tg",
+                   "ga_ambiguous": "gx"}
+# Per-type result rows (event_set "<type>_only") when events of more than
+# one type are present.
+EVENT_TYPE_BREAKDOWN = ("go_around", "touch_and_go")
 # Matched landing controls: full-stop arrivals anchored at their low point,
 # at most this many (random, seeded) to bound the control computation.
 CONTROL_OUTCOMES = ("full_stop",)

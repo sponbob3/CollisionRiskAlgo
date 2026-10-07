@@ -4,6 +4,20 @@ section 13). goaround_pipeline/ is not edited; everything this package
 needs from it is imported and re-exported here, and run_goaround()
 reproduces run_analysis.py from that repository step by step so that
 output/<ICAO>/goaround/run_NN/ is identical to a native run.
+
+Two input-handling functions are provided here instead of the vendored
+ones, and are used by BOTH stages (the go-around stage gets them for the
+duration of run_goaround(), without editing the vendored files):
+
+- data_files(): finds daily files in the dataset folder AND its
+  subfolders (e.g. one subfolder per month).
+- load_day(): the vendored loader plus the position-freshness filter.
+  OpenSky state vectors repeat an aircraft's last known position for up
+  to 300 s after its last position report, so a large share of rows can
+  be frozen copies of an old position. Only rows that carry a NEW
+  position report are kept, and they are re-timed to the time of that
+  report. Applied when the file has a position-time column
+  (POSITION_TIME_COLUMNS); files without one load exactly as before.
 """
 
 from __future__ import annotations
@@ -12,27 +26,169 @@ import datetime
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from goaround_pipeline import config  # the go-around config module
 from goaround_pipeline import pipeline, profiles
 from goaround_pipeline.approaches import (NM_PER_DEG_LAT, FT_PER_NM,
                                           _runway_frame, _track_delta)
-from goaround_pipeline.loading import RAW_COLUMNS, load_day, split_into_legs
-from goaround_pipeline.pipeline import data_files
+from goaround_pipeline.loading import RAW_COLUMNS, split_into_legs
+from goaround_pipeline import loading as _ga_loading
+
+from . import config as px_config
 
 __all__ = [
     "config", "load_profile", "create_profile", "load_day",
     "split_into_legs", "data_files", "runway_frame", "track_delta",
     "NM_PER_DEG_LAT", "FT_PER_NM", "RAW_COLUMNS", "run_goaround",
     "next_run_number", "read_events", "read_approaches", "draw_runways",
+    "has_data_files", "freshness_filter",
 ]
+
+# ------------------------------------------------------- input files --
+
+def data_files(data_dir: Path) -> list[Path]:
+    """Daily files in a dataset folder and any of its subfolders (e.g.
+    datasets/KMCO_2025Q1/2025-01/...). When the same day exists as both
+    parquet and csv, the parquet wins (the vendored rule). Hidden files
+    (names starting with '.', such as macOS '._' copies) are ignored. Two
+    different files for the same day name are an error rather than a
+    silent pick."""
+    data_dir = Path(data_dir)
+    by_stem: dict[str, Path] = {}
+    for f in sorted(data_dir.rglob("*.csv")) + sorted(
+            data_dir.rglob("*.parquet")):
+        if any(part.startswith(".") for part in f.relative_to(data_dir).parts):
+            continue
+        prev = by_stem.get(f.stem)
+        if (prev is not None and prev.suffix == f.suffix
+                and prev != f):
+            raise ValueError(
+                f"two daily files named {f.stem}{f.suffix} in {data_dir}: "
+                f"{prev.relative_to(data_dir)} and "
+                f"{f.relative_to(data_dir)}; keep only one")
+        by_stem[f.stem] = f   # parquet sorted second -> overrides csv
+    return [by_stem[k] for k in sorted(by_stem)]
+
+
+def has_data_files(data_dir: Path) -> bool:
+    return bool(data_files(data_dir)) if Path(data_dir).is_dir() else False
+
+
+# ------------------------------------------------- position freshness --
+
+def _read_position_time(path: Path) -> tuple[pd.DataFrame | None, str]:
+    """(icao24, timestamp, position time in epoch seconds) of a raw file,
+    or (None, "") when it has no position-time column."""
+    path = Path(path)
+    if path.suffix.lower() == ".csv":
+        cols = list(pd.read_csv(path, nrows=0).columns)
+    else:
+        import pyarrow.parquet as pq
+        cols = pq.read_schema(path).names
+    name = next((c for c in px_config.POSITION_TIME_COLUMNS if c in cols), "")
+    if not name:
+        return None, ""
+    use = ["icao24", "timestamp", name]
+    side = (pd.read_csv(path, usecols=use) if path.suffix.lower() == ".csv"
+            else pd.read_parquet(path, columns=use))
+    side["timestamp"] = pd.to_datetime(
+        side["timestamp"], utc=True).astype("datetime64[ns, UTC]")
+    pt = side[name]
+    if pd.api.types.is_datetime64_any_dtype(pt):
+        pt = pd.to_datetime(pt, utc=True).astype("int64") / 1e9
+    side["position_time"] = pd.to_numeric(pt, errors="coerce").astype(float)
+    side = side.drop(columns=[name]).drop_duplicates(["icao24", "timestamp"])
+    return side, name
+
+
+def freshness_filter(df: pd.DataFrame, side: pd.DataFrame) -> tuple[
+        pd.DataFrame, dict]:
+    """Keep only rows that carry a new position report, re-timed to the
+    report time. `df` is the vendored loader's output (sorted by icao24,
+    timestamp); `side` holds each row's position time."""
+    n_in = len(df)
+    df = df.merge(side, on=["icao24", "timestamp"], how="left")
+    ts = df["timestamp"].astype("int64").to_numpy() / 1e9
+    pt = df["position_time"].to_numpy()
+    prev = df.groupby("icao24", sort=False)["position_time"].shift()
+    new_report = (df["position_time"] != prev).to_numpy()
+    age = ts - pt
+    known = np.isfinite(pt)
+    keep = ~known | (new_report & (age <= px_config.MAX_POSITION_AGE_S)
+                     & (age >= -px_config.MAX_POSITION_AGE_S))
+    out = df[keep].copy()
+    k = out["position_time"].notna()
+    out.loc[k, "timestamp"] = pd.to_datetime(
+        np.round(out.loc[k, "position_time"].to_numpy()), unit="s",
+        utc=True).astype("datetime64[ns, UTC]")
+    out = (out.drop(columns=["position_time"])
+           .sort_values(["icao24", "timestamp"], kind="stable")
+           .drop_duplicates(["icao24", "timestamp"], keep="first")
+           .reset_index(drop=True))
+    stats = {"rows_in": n_in, "rows_kept": int(len(out)),
+             "stale_share": 1.0 - len(out) / n_in if n_in else 0.0}
+    return out, stats
+
+
+def load_day(path, return_stats: bool = False):
+    """The vendored loader plus the position-freshness filter (see the
+    module docstring). With return_stats, also returns a dict with the
+    rows in / kept and the stale share."""
+    df = _ga_loading.load_day(path)
+    stats = {"rows_in": len(df), "rows_kept": len(df), "stale_share": 0.0,
+             "position_time_column": ""}
+    if px_config.POSITION_FRESHNESS_FILTER and len(df):
+        side, name = _read_position_time(Path(path))
+        if side is not None:
+            df, st = freshness_filter(df, side)
+            stats.update(st)
+            stats["position_time_column"] = name
+    return (df, stats) if return_stats else df
+
+
+class _InputHandling:
+    """Context manager: the vendored pipeline uses this module's
+    data_files() and load_day() for the duration of a go-around run."""
+
+    def __enter__(self):
+        self._saved = (pipeline.data_files, pipeline.load_day)
+        pipeline.data_files = data_files
+        pipeline.load_day = load_day
+        return self
+
+    def __exit__(self, *exc):
+        pipeline.data_files, pipeline.load_day = self._saved
+        return False
+
 
 # runway-frame geometry (along-track / cross-track in NM relative to a
 # threshold, positive along-track = on final) reused for flight phases
 # and geometry classes
 runway_frame = _runway_frame
 track_delta = _track_delta
+
+
+_CONFIG_DEFAULTS: dict = {}
+
+
+def config_defaults(name: str):
+    """A go-around parameter's value as shipped (config.py plus the
+    air_carrier / training_ga presets are applied later by profiles), read
+    from the module source so that a loaded profile does not change it."""
+    if not _CONFIG_DEFAULTS:
+        import ast
+        src = Path(config.__file__).read_text()
+        for node in ast.parse(src).body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)):
+                try:
+                    _CONFIG_DEFAULTS[node.targets[0].id] = ast.literal_eval(
+                        node.value)
+                except ValueError:
+                    pass
+    return _CONFIG_DEFAULTS[name]
 
 
 def load_profile(icao: str) -> dict:
@@ -94,7 +250,8 @@ def run_goaround(dataset: Path, run_dir: Path, plots: bool = True,
               f"{config.AIRPORT_ICAO}  preset {config.PRESET}  terrain "
               f"{config.TERRAIN_MODE}  -> {run_dir}")
     _dump_run_config(run_dir, dataset, n_files, argv or sys.argv)
-    df = pipeline.run(dataset, run_dir, plots=plots, limit=limit)
+    with _InputHandling():
+        df = pipeline.run(dataset, run_dir, plots=plots, limit=limit)
     summary = pipeline.write_summaries(df, run_dir)
     if not quiet:
         print()

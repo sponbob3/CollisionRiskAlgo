@@ -104,11 +104,13 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
     figdir = run_dir / "figures"
     icao = ga.config.AIRPORT_ICAO
     story = []
-    story.append(Paragraph(f"Proximity risk after go-arounds — {icao}", S["h1"]))
+    from .events import event_count_text
+    story.append(Paragraph(f"Proximity risk after go-arounds and "
+                           f"touch-and-goes — {icao}", S["h1"]))
     wm = res["window_metrics"]
     story.append(Paragraph(
         f"{run_dir.parent.parent.name} / {run_dir.name}  ·  "
-        f"{wm['day'].nunique()} days, {len(ev)} go-arounds, "
+        f"{wm['day'].nunique()} days, {event_count_text(ev)}, "
         f"{len(res['control_windows']) // 2} matched landing controls  ·  "
         f"window {config.WINDOW_MIN:g} min, radius "
         f"{config.VOLUME_RADIUS_NM:g} NM", S["sub"]))
@@ -118,7 +120,7 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
                    & (results["event_set"] == "all")].set_index("scope")
     lines = []
     for scope, name in (("airspace", "Airspace-wide"),
-                        ("ga_involved", "Go-around-involved")):
+                        ("ga_involved", "Go-around / touch-and-go aircraft")):
         if scope not in prim.index:
             continue
         r = prim.loc[scope]
@@ -139,7 +141,8 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
            or c["ece"] > config.PROB_MAX_ECE]
     verdict_rows = [["check", "result"],
                     ["baseline (airspace-wide)", bl.verdict],
-                    ["baseline (go-around-involved)", bl_inv.verdict]]
+                    ["baseline (go-around / touch-and-go aircraft)",
+                     bl_inv.verdict]]
     for _, e in eq.iterrows():
         verdict_rows.append([f"equilibrium ({e['scope']})",
                              f"{e['verdict']}: pre in control "
@@ -180,10 +183,10 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
         ["item", "value"],
         ["charted ceiling", f"{chk['charted_ceiling_ft_msl']:.0f} ft MSL = "
                             f"{chk['charted_ceiling_ft_agl']:.0f} ft above field"],
-        ["go-around max height P95 (post window)",
+        ["event aircraft max height P95 (post window)",
          f"{_f(chk['p95_ga_max_height_ft_agl'], 0)} ft above field "
          f"(n={chk['n_go_arounds']})"],
-        ["go-around T1 encounters above charted ceiling",
+        ["event-aircraft T1 encounters above charted ceiling",
          f"{100 * chk['spill_share_at_charted']:.1f}% of "
          f"{chk['n_ga_t1_encounters']} (limit {100 * chk['spill_limit']:.0f}%)"],
         ["post-window time beyond radius",
@@ -221,7 +224,7 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
         f"(fewer than {config.GLM_MIN_EVENTS} baseline events).", S["body"]))
 
     for name, cap in (("superposed_epoch.png", "Headline: T1 encounter rate "
-                       "O/E around the go-around"),
+                       "O/E around the go-arounds and touch-and-goes"),
                       ("forest.png", "IRR and SIR per endpoint and scope"),
                       ("equilibrium.png", "Equilibrium of pre windows"),
                       ("control_chart.png", "Control chart of every window"),
@@ -237,8 +240,8 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
         story.append(_image(figdir / "sensitivity.png", 6.9 * inch))
 
     story.append(PageBreak())
-    story.append(Paragraph("Go-around events", S["h2"]))
-    cols = ["event_id", "callsign", "runway", "t0_utc", "pre_T1_any",
+    story.append(Paragraph("Events (go-arounds and touch-and-goes)", S["h2"]))
+    cols = ["event_id", "outcome", "callsign", "runway", "t0_utc", "pre_T1_any",
             "pre_T1_any_expected", "pre_T1_any_z", "post_T1_any",
             "post_T1_any_expected", "post_T1_any_z", "excluded"]
     have = [c for c in cols if c in risk.columns]
@@ -271,13 +274,18 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
         f"<b>Baseline.</b> Negative binomial regression of encounter counts "
         f"per {config.WINDOW_MIN:g}-min clock window on hour, day type, month, "
         f"runway flow and traffic, with pair-hours as exposure; windows within "
-        f"{config.BASELINE_EXCLUSION_MIN:.0f} min of a go-around and bad-quality "
+        f"{config.BASELINE_EXCLUSION_MIN:.0f} min of a go-around or touch-and-go "
+        f"and bad-quality "
         f"windows excluded; Phase I trimming; out-of-sample calibration.",
-        "<b>Comparison.</b> Pre and post windows of each go-around are scored "
+        "<b>Events.</b> Go-arounds and touch-and-goes from the go-around "
+        "pipeline (each keeps its own name); both put an aircraft back into "
+        "the terminal airspace on a climb-out, so both are analysed. Results "
+        "are also given per type when both occur.",
+        "<b>Comparison.</b> Pre and post windows of each event are scored "
         "against the baseline (z-scores, control limits). Post vs pre: rate "
         "ratio with day-clustered bootstrap CI and Wilcoxon signed-rank test. "
         "Post vs baseline: standardised incidence ratio with day-block "
-        "bootstrap CI. Go-around-involved encounters are compared with "
+        "bootstrap CI. Encounters involving the event aircraft are compared with "
         "matched full-stop landings.",
         "<b>Limitations.</b> Proximity risk is a surrogate for safety, not a "
         "collision probability. Surveillance only; straight-line prediction "
@@ -288,7 +296,8 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
         story.append(Paragraph(txt, S["body"]))
         story.append(Spacer(1, 6))
     out = run_dir / "summary.pdf"
-    _doc(out, f"Proximity risk after go-arounds - {icao}").build(story)
+    _doc(out, f"Proximity risk after go-arounds and touch-and-goes - "
+              f"{icao}").build(story)
     return out
 
 
@@ -307,7 +316,7 @@ def baseline_report(bl, bl_inv, calib: dict, em_table: pd.DataFrame,
                            S["big"]))
     for w in bl.warnings:
         story.append(Paragraph(f"- {w}", S["warn"]))
-    story.append(Paragraph(f"<b>VERDICT (go-around-involved, matched landing "
+    story.append(Paragraph(f"<b>VERDICT (go-around / touch-and-go aircraft, matched landing "
                            f"controls): {bl_inv.verdict}</b>", S["big"]))
     for w in bl_inv.warnings:
         story.append(Paragraph(f"- {w}", S["warn"]))

@@ -170,6 +170,7 @@ def compute_day(dg: DayGrid, radius_nm: float | None = None,
         "r": air["r"].to_numpy(),
         "h": air["h"].to_numpy(),
         "interpolated": air["interpolated"].to_numpy(),
+        "interp_long": air["interp_long"].to_numpy(),
         "phase": phase_all,
     })
     in_radius = (air["r"] <= radius_nm).to_numpy()

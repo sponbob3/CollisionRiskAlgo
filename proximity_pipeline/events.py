@@ -1,12 +1,13 @@
 """
-Go-around events, their pre/post windows, clusters, matched landing
-controls, and the tagging of encounters that involve the event aircraft
-(FRAMEWORK.md sections 9.7 and 10).
+Events (go-arounds and touch-and-goes), their pre/post windows, clusters,
+matched landing controls, and the tagging of encounters that involve the
+event aircraft (FRAMEWORK.md sections 9.7 and 10).
 
-Events come from the go-around stage's approach table. The anchor t0 is
-the climb start (fallback: the profile low point). Matched controls are
-normal full-stop arrivals anchored at their low point, outside the
-exclusion zone around any go-around.
+Events come from the go-around stage's approach table: outcomes in
+config.EVENT_OUTCOMES (go_around and touch_and_go; each event keeps its
+outcome as its type). The anchor t0 is the climb start (fallback: the
+profile low point). Matched controls are normal full-stop arrivals
+anchored at their low point, outside the exclusion zone around any event.
 """
 
 from __future__ import annotations
@@ -35,8 +36,9 @@ def _anchor(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 
 def event_table(approaches: pd.DataFrame, outcomes: tuple[str, ...],
                 window_min: float) -> pd.DataFrame:
-    """One row per go-around event with its pre/post window bounds,
-    cluster membership and pre-window contamination flag."""
+    """One row per event (go-around or touch-and-go; `outcome` is its
+    type) with its pre/post window bounds, cluster membership and
+    pre-window contamination flag."""
     ev = approaches[approaches["outcome"].isin(outcomes)].copy()
     ev = ev.sort_values("t_low_utc").reset_index(drop=True)
     w = int(window_min * 60)
@@ -45,9 +47,11 @@ def event_table(approaches: pd.DataFrame, outcomes: tuple[str, ...],
             "cluster_id", "cluster_size", "cluster_first",
             "pre_contaminated"])
     t0, anchor = _anchor(ev)
+    outcome = ev["outcome"].to_numpy()
     out = pd.DataFrame({
-        "event_id": [f"ga_{i:04d}" for i in range(len(ev))],
-        "kind": "go_around",
+        "event_id": [f"{config.EVENT_ID_PREFIX.get(o, 'ev')}_{i:04d}"
+                     for i, o in enumerate(outcome)],
+        "kind": outcome,
         "icao24": ev["icao24"].astype(str).to_numpy(),
         "callsign": ev["callsign"].astype(str).to_numpy(),
         "runway": ev["runway"].astype(str).to_numpy(),
@@ -61,7 +65,7 @@ def event_table(approaches: pd.DataFrame, outcomes: tuple[str, ...],
         "min_agl_ft": ev["min_agl_ft"].to_numpy(),
     })
     out = out.sort_values("t0").reset_index(drop=True)
-    # clusters: go-arounds within W of each other (section 10)
+    # clusters: events within W of each other (section 10)
     t = out["t0"].to_numpy()
     new = np.ones(len(t), dtype=bool)
     new[1:] = (t[1:] - t[:-1]) > w
@@ -267,3 +271,23 @@ def involved_frame(win_metrics: pd.DataFrame, enc: pd.DataFrame,
             out["pair_hours"] > 0,
             out[f"{tier}_any"] / out["pair_hours"].replace(0, np.nan), np.nan)
     return out
+
+
+def event_label(outcome: str, plural: bool = False) -> str:
+    if plural:
+        return config.EVENT_LABELS_PLURAL.get(
+            outcome, str(outcome).replace("_", " ") + "s")
+    return config.EVENT_LABELS.get(outcome, str(outcome).replace("_", " "))
+
+
+def event_count_text(events: pd.DataFrame) -> str:
+    """'12 go-arounds and 3 touch-and-goes' (every primary type shown,
+    zero counts included, so the composition is always explicit)."""
+    vc = (events["outcome"].value_counts() if len(events)
+          else pd.Series(dtype=int))
+    types = list(config.EVENT_OUTCOMES) + [o for o in vc.index
+                                           if o not in config.EVENT_OUTCOMES]
+    parts = [f"{int(vc.get(o, 0))} {event_label(o, plural=vc.get(o, 0) != 1)}"
+             for o in types]
+    return (", ".join(parts[:-1]) + " and " + parts[-1]
+            if len(parts) > 1 else parts[0])

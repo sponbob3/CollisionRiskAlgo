@@ -64,6 +64,9 @@ def sweep(days: dict, app: pd.DataFrame, error_model, ev: pd.DataFrame,
                   event_set="in_control_pre")
     rows += _rows("geometry", "excluding_procedural_T1", base_res,
                   endpoint="T1_any_nonprocedural")
+    for typ in config.EVENT_TYPE_BREAKDOWN:
+        rows += _rows("event_set", f"{typ}_only", base_res,
+                      event_set=f"{typ}_only")
 
     variations = []
     for w in config.WINDOW_SENSITIVITY_MIN:

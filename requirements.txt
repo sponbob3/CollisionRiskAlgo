@@ -10,6 +10,8 @@ matplotlib
 pyyaml
 pyproj
 traffic
+httpx         # airport database download (also a traffic dependency)
+timezonefinder  # airport timezone from coordinates (automatic profiles)
 rich          # imported by some traffic releases without being declared
 reportlab
 pypdf

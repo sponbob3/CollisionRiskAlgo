@@ -32,6 +32,8 @@ output/*
 
 # Cached terrain tiles (auto-downloaded per airport on first dem-mode run)
 airports/dem_cache/
+# Cached OurAirports database (downloaded on first automatic profile)
+airports/.ourairports/
 
 # Scratch dir written by direct goaround_pipeline module runs
 results/

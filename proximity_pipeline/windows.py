@@ -158,7 +158,7 @@ class DayArrays:
         inner = np.bincount(sec[(p["r"].to_numpy()[ok]
                                  <= config.INNER_RADIUS_NM)],
                             minlength=DAY_S).astype(np.int64)
-        interp = np.bincount(sec, weights=p["interpolated"].to_numpy()[ok],
+        interp = np.bincount(sec, weights=p["interp_long"].to_numpy()[ok],
                              minlength=DAY_S)
         self.n = n
         self.cum_n = np.concatenate([[0], np.cumsum(n)])
@@ -420,7 +420,9 @@ def interval_metrics(intervals: pd.DataFrame, exposure: Exposure,
     spec = exposure.spec
     rows = [exposure.interval(int(a), int(b))
             for a, b in zip(intervals["t_start"], intervals["t_end"])]
-    m = pd.DataFrame(rows, index=intervals.index)
+    m = pd.DataFrame(rows, index=intervals.index, columns=[
+        "seconds", "aircraft_s", "pair_s", "pair_s_inner", "interp_s",
+        "gaps", "outage", "covered_s", "n_aircraft", "partial"])
     out = intervals.copy()
     out["n_aircraft"] = m["n_aircraft"]
     out["aircraft_s"] = m["aircraft_s"]

@@ -47,6 +47,8 @@ class DayGrid:
     messages_per_s: np.ndarray     # raw message count per second of day
     n_raw: int = 0
     n_dropped_jumps: int = 0
+    n_rows_in_file: int = 0        # before the position-freshness filter
+    stale_share: float = 0.0       # share of rows removed by that filter
     notes: list = field(default_factory=list)
 
 
@@ -127,6 +129,12 @@ def clean_day(raw: pd.DataFrame) -> tuple[list[pd.DataFrame], int]:
             if len(leg) < 2:
                 continue
             leg = leg.reset_index(drop=True).copy()
+            # isolated GNSS altitude spikes: geometric altitude far from
+            # barometric (beyond the leg's typical offset) -> missing
+            off = leg["geoaltitude"] - leg["altitude"]
+            if off.notna().any():
+                dev = (off - off.median()).abs()
+                leg.loc[dev > config.GEO_BARO_MAX_DEV_FT, "geoaltitude"] = np.nan
             elev = ga.config.FIELD_ELEVATION_FT
             h = leg["geoaltitude"] - elev
             # barometric fallback where geometric altitude is missing,
@@ -201,11 +209,18 @@ def leg_to_grid(leg: pd.DataFrame, leg_idx: int):
         "vrate": _interp_nan(t_new, t, leg["vrate"].to_numpy(float)),
     }
     onground = np.interp(t_new, t, leg["onground"].to_numpy(float)) > 0.5
+    # length of the raw report gap each grid second lies in (quality:
+    # only filling across long gaps counts as degraded data, section 8.3)
+    seg = np.clip(np.searchsorted(t, t_new, side="right") - 1, 0,
+                  max(len(dts) - 1, 0))
+    gap_len = dts[seg] if len(dts) else np.zeros(n)
     keep = ~absent
     g = pd.DataFrame({k: v[keep] for k, v in cols.items()})
     g.insert(0, "t", t_new[keep])
     g.insert(0, "leg", np.int32(leg_idx))
     g["interpolated"] = ~is_sample[keep]
+    g["interp_long"] = (~is_sample[keep]
+                        & (gap_len[keep] > config.QUALITY_INTERP_GAP_S))
     g["onground"] = onground[keep]
     return g, gap_rows
 
@@ -213,12 +228,16 @@ def leg_to_grid(leg: pd.DataFrame, leg_idx: int):
 def build_day_grid(path: Path) -> DayGrid:
     """Load, clean and resample one daily file (section 4)."""
     path = Path(path)
-    raw = ga.load_day(path)
+    raw, fresh = ga.load_day(path, return_stats=True)
     n_raw = len(raw)
     legs, n_jumps = clean_day(raw)
     if not legs:
         raise ValueError(f"{path.name}: no usable aircraft legs")
-    date = raw["timestamp"].min().floor("D")
+    # the UTC day the file covers: from the median timestamp, not the
+    # first one - re-timing to position-report time (and data that starts
+    # a few seconds before midnight) can put a handful of rows in the
+    # previous day, which must not shift the whole day
+    date = raw["timestamp"].sort_values().iloc[len(raw) // 2].floor("D")
     t0 = int(date.value // 10**9)
 
     # raw message count per second of the day (outage detection, 8.3)
@@ -262,7 +281,9 @@ def build_day_grid(path: Path) -> DayGrid:
     return DayGrid(day=path.stem, date=date, t0=t0, grid=grid,
                    legs=pd.DataFrame(leg_rows), gaps=gaps,
                    messages_per_s=counts, n_raw=n_raw,
-                   n_dropped_jumps=n_jumps)
+                   n_dropped_jumps=n_jumps,
+                   n_rows_in_file=fresh["rows_in"],
+                   stale_share=fresh["stale_share"])
 
 
 def outages(messages_per_s: np.ndarray, legs: pd.DataFrame | None = None,
@@ -305,10 +326,11 @@ def audit_dataset(dataset: Path, limit: int | None = None) -> pd.DataFrame:
     for i, f in enumerate(files):
         try:
             if f.suffix.lower() == ".csv":
-                head = pd.read_csv(f, nrows=5)
+                names = list(pd.read_csv(f, nrows=0).columns)
             else:
-                head = pd.read_parquet(f)
-            missing = [c for c in ga.RAW_COLUMNS if c not in head.columns]
+                import pyarrow.parquet as pq
+                names = pq.read_schema(f).names
+            missing = [c for c in ga.RAW_COLUMNS if c not in names]
             if missing:
                 rows.append({"day": f.stem, "ok": False,
                              "problem": f"missing columns {missing}"})
@@ -328,6 +350,8 @@ def audit_dataset(dataset: Path, limit: int | None = None) -> pd.DataFrame:
             "day": f.stem,
             "ok": True,
             "date": f"{dg.date:%Y-%m-%d}",
+            "rows_in_file": dg.n_rows_in_file,
+            "stale_position_share": dg.stale_share,
             "messages": dg.n_raw,
             "messages_in_load_radius": int(sum(dg.legs["n_raw"])),
             "aircraft": int(dg.legs["icao24"].nunique()),
@@ -336,6 +360,7 @@ def audit_dataset(dataset: Path, limit: int | None = None) -> pd.DataFrame:
             "dropped_jumps": dg.n_dropped_jumps,
             "gaps_over_10s": int(len(dg.gaps)),
             "interp_share": float(g["interpolated"].mean()),
+            "interp_long_share": float(g["interp_long"].mean()),
             "outages": len(outs),
             "outage_s": int(sum(b - a for a, b in outs)),
             "baro_alt_share": float(raw["altitude"].notna().mean()),
@@ -344,7 +369,9 @@ def audit_dataset(dataset: Path, limit: int | None = None) -> pd.DataFrame:
             "problem": "",
         }
         rows.append(row)
-        print(f"[{i + 1}/{len(files)}] {f.name}: {row['messages']:,} msgs, "
+        print(f"[{i + 1}/{len(files)}] {f.name}: {row['messages']:,} fresh "
+              f"position reports ({100 * row['stale_position_share']:.0f}% "
+              f"stale rows removed), "
               f"{row['aircraft']} aircraft, {row['airborne_ac_in_volume']} "
               f"airborne in volume, {row['gaps_over_10s']} gaps, "
               f"{row['outages']} outages, geo-alt "
@@ -355,9 +382,13 @@ def audit_dataset(dataset: Path, limit: int | None = None) -> pd.DataFrame:
     print(f"days found: {len(files)}   readable: {n_ok}")
     if n_ok:
         ok = table[table["ok"]]
+        print(f"stale (repeated-position) rows removed: "
+              f"{100 * ok['stale_position_share'].mean():.1f}% of rows")
         print(f"messages/day: median {ok['messages'].median():,.0f}   "
               f"aircraft/day: median {ok['aircraft'].median():.0f}   "
-              f"interpolated share: {ok['interp_share'].mean():.3f}")
+              f"interpolated share: {ok['interp_share'].mean():.3f} "
+              f"(across gaps > {config.QUALITY_INTERP_GAP_S:g} s: "
+              f"{ok['interp_long_share'].mean():.3f})")
         print(f"altitude references: barometric "
               f"{100 * ok['baro_alt_share'].mean():.1f}%   geometric "
               f"{100 * ok['geo_alt_share'].mean():.1f}%")
