@@ -19,8 +19,13 @@ every threshold is a named, documented parameter in
 Python 3.11 or newer (the same environment as the go-around pipeline).
 
 ```bash
+python3 --version                  # must be 3.11 or newer (macOS's own
+                                   # python3 may be 3.9: install 3.12 from
+                                   # python.org or with Homebrew)
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+# every new terminal: source .venv/bin/activate  (prompt shows "(.venv)")
 
 # put daily .parquet/.csv files of ALL traffic around the airport in
 # datasets/<ICAO>_<label>/ (directly or in subfolders, e.g. one per month)
