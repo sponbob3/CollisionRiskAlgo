@@ -39,7 +39,7 @@ One run writes two fresh numbered folders with the same number:
 
 | folder | content |
 |---|---|
-| `output/KBNA/goaround/run_NN/` | the exact outputs of the go-around pipeline (`all_approaches.csv`, `go_around_events.csv`, `summary.pdf`, per-event plots, `run_config.txt`) |
+| `output/KBNA/goaround/run_NN/` | the go-around pipeline's outputs (`all_approaches.csv`, `go_around_events.csv`, `summary.pdf`, per-event plots, `run_config.txt`); climb-aways whose low point was hidden below the ADS-B coverage floor are go-arounds (`reclassified_from`, `low_point_hidden_s` columns; FRAMEWORK.md section 13) |
 | `output/KBNA/proximity_risk/run_NN/` | `summary.pdf` (verdicts on page 1), `results_primary.csv` (IRR / SIR per endpoint and scope), `go_around_risk.csv` (one row per go-around or touch-and-go), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around or touch-and-go), `run_config.txt` |
 | `output/KBNA/proximity_risk/baseline/<label>/` | the stored, validated baseline (`baseline.json`, `baseline_windows.parquet`, `error_model.csv`, `phase1_removed.csv`, `validation/`, `baseline_report.pdf`), reused automatically while the data and parameters match |
 

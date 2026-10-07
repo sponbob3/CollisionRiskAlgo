@@ -22,17 +22,28 @@ def _native_run(dataset, out_dir):
     return df
 
 
-def test_adapter_matches_native_go_around_run(synth_dataset, tmp_path, kbna):
+def test_adapter_matches_native_go_around_run(synth_dataset, tmp_path, kbna,
+                                             monkeypatch):
+    # the adapter's mechanics must reproduce the native run exactly; the
+    # hidden-low-point rule (a deliberate addition, tested separately) is
+    # switched off here
+    from proximity_pipeline import config as px_config
+    monkeypatch.setattr(px_config, "GA_HIDDEN_LOW_POINT_AS_GO_AROUND", False)
     native = _native_run(synth_dataset, tmp_path / "native")
     ga.load_profile("KBNA")
     ours = ga.run_goaround(synth_dataset, tmp_path / "adapter", plots=False,
                            quiet=True, argv=["test"])
-    pd.testing.assert_frame_equal(native, ours)
-    for name in ("all_approaches.csv", "go_around_events.csv",
-                 "summary_outcomes.csv", "summary_by_runway.csv",
+    pd.testing.assert_frame_equal(
+        native, ours.drop(columns=["reclassified_from", "low_point_hidden_s"]))
+    for name in ("summary_outcomes.csv", "summary_by_runway.csv",
                  "summary_by_month.csv"):
         assert filecmp.cmp(tmp_path / "native" / name,
                            tmp_path / "adapter" / name, shallow=False), name
+    for name in ("all_approaches.csv", "go_around_events.csv"):
+        a = pd.read_csv(tmp_path / "native" / name)
+        b = pd.read_csv(tmp_path / "adapter" / name)
+        pd.testing.assert_frame_equal(
+            a, b.drop(columns=["reclassified_from", "low_point_hidden_s"]))
     assert (tmp_path / "adapter" / "run_config.txt").exists()
     assert (tmp_path / "adapter" / "summary.pdf").exists()
     # the synthetic go-arounds are found

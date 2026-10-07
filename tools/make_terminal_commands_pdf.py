@@ -150,7 +150,7 @@ COMMANDS = [
     ]),
     ("8. Where things land", [
         ("output/KMCO/goaround/run_NN/",
-         "Exact go-around pipeline outputs (all_approaches.csv, "
+         "Go-around pipeline outputs (all_approaches.csv, "
          "go_around_events.csv, summary.pdf, plots/, run_config.txt)."),
         ("output/KMCO/proximity_risk/run_NN/",
          "run_config.txt, ceiling_check.csv, data_quality.csv, "

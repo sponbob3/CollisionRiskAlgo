@@ -5,9 +5,9 @@ needs from it is imported and re-exported here, and run_goaround()
 reproduces run_analysis.py from that repository step by step so that
 output/<ICAO>/goaround/run_NN/ is identical to a native run.
 
-Two input-handling functions are provided here instead of the vendored
-ones, and are used by BOTH stages (the go-around stage gets them for the
-duration of run_goaround(), without editing the vendored files):
+Three hooks are provided here instead of the vendored functions (the
+go-around stage gets them for the duration of run_goaround(), without
+editing the vendored files); the first two are used by BOTH stages:
 
 - data_files(): finds daily files in the dataset folder AND its
   subfolders (e.g. one subfolder per month).
@@ -18,6 +18,14 @@ duration of run_goaround(), without editing the vendored files):
   position report are kept, and they are re-timed to the time of that
   report. Applied when the file has a position-time column
   (POSITION_TIME_COLUMNS); files without one load exactly as before.
+- classify_approach(): the vendored classifier plus the hidden-low-point
+  rule. A climb-away (no touchdown) classified low_approach or
+  ga_ambiguous only because its low point fell inside a data gap (ADS-B
+  coverage ending above the runway) is a go-around: when the level time
+  that was actually observed - the measured plateau minus the hidden gap
+  time - is within the go-around cutoff. Reclassified approaches are
+  listed with `reclassified_from` and `low_point_hidden_s` in
+  all_approaches.csv and go_around_events.csv.
 """
 
 from __future__ import annotations
@@ -35,6 +43,9 @@ from goaround_pipeline.approaches import (NM_PER_DEG_LAT, FT_PER_NM,
                                           _runway_frame, _track_delta)
 from goaround_pipeline.loading import RAW_COLUMNS, split_into_legs
 from goaround_pipeline import loading as _ga_loading
+from goaround_pipeline import classify as _ga_classify
+from goaround_pipeline.pipeline import results_to_frame as \
+    _ga_pipeline_results_to_frame
 
 from . import config as px_config
 
@@ -148,18 +159,73 @@ def load_day(path, return_stats: bool = False):
     return (df, stats) if return_stats else df
 
 
+# ------------------------------------------------- hidden low point ----
+
+CLIMB_AWAY_RECLASSIFIABLE = ("low_approach", "ga_ambiguous")
+
+
+def hidden_low_point(r) -> tuple[float, float]:
+    """(hidden s, observed level s) of a climb-away's plateau: the
+    plateau runs from the last descent into the low band until the climb
+    start (level_low_duration_s); report gaps longer than
+    GA_HIDDEN_GAP_MIN_S inside it are hidden time."""
+    if r.climb_start is None or not np.isfinite(r.level_low_duration_s):
+        return 0.0, float(r.level_low_duration_s)
+    t = (r.approach.data["timestamp"].astype("int64").to_numpy() / 1e9)
+    cs = pd.Timestamp(r.climb_start).value / 1e9
+    entry = cs - float(r.level_low_duration_s)
+    lo = max(int(np.searchsorted(t, entry, side="left")) - 1, 0)
+    hi = int(np.searchsorted(t, cs, side="right"))
+    span = np.clip(t[lo:hi], entry, cs)
+    d = np.diff(span)
+    hidden = float(np.sum(d[d > px_config.GA_HIDDEN_GAP_MIN_S]))
+    return hidden, float(r.level_low_duration_s) - hidden
+
+
+def classify_approach(app):
+    """The vendored classifier plus the hidden-low-point rule (see the
+    module docstring)."""
+    r = _ga_classify.classify_approach(app)
+    r.reclassified_from = ""
+    r.low_point_hidden_s = 0.0
+    if r.outcome in CLIMB_AWAY_RECLASSIFIABLE:
+        hidden, observed = hidden_low_point(r)
+        r.low_point_hidden_s = round(hidden, 1)
+        if (px_config.GA_HIDDEN_LOW_POINT_AS_GO_AROUND
+                and hidden > 0 and observed <= config.LEVEL_GA_MAX_S):
+            r.reclassified_from = r.outcome
+            r.outcome = "go_around"
+    return r
+
+
+def results_to_frame(results) -> pd.DataFrame:
+    """The vendored approach table plus the reclassification columns."""
+    df = _ga_pipeline_results_to_frame(results)
+    if len(df):
+        df["reclassified_from"] = [getattr(r, "reclassified_from", "")
+                                   for r in results]
+        df["low_point_hidden_s"] = [getattr(r, "low_point_hidden_s", 0.0)
+                                    for r in results]
+    return df
+
+
 class _InputHandling:
     """Context manager: the vendored pipeline uses this module's
-    data_files() and load_day() for the duration of a go-around run."""
+    data_files(), load_day(), classify_approach() and results_to_frame()
+    for the duration of a go-around run."""
 
     def __enter__(self):
-        self._saved = (pipeline.data_files, pipeline.load_day)
+        self._saved = (pipeline.data_files, pipeline.load_day,
+                       pipeline.classify_approach, pipeline.results_to_frame)
         pipeline.data_files = data_files
         pipeline.load_day = load_day
+        pipeline.classify_approach = classify_approach
+        pipeline.results_to_frame = results_to_frame
         return self
 
     def __exit__(self, *exc):
-        pipeline.data_files, pipeline.load_day = self._saved
+        (pipeline.data_files, pipeline.load_day,
+         pipeline.classify_approach, pipeline.results_to_frame) = self._saved
         return False
 
 

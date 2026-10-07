@@ -86,6 +86,19 @@ VRATE_SMOOTH_WINDOW_S = 7
 # pipeline, section 4.2).
 SEGMENT_GAP_MINUTES = 20.0
 
+# ------------------------------------------- go-around classification ----
+# Climb-aways whose low point is hidden by a data gap (FRAMEWORK.md
+# section 13). Where ADS-B coverage ends above the runway (KMCO: ~530 ft
+# above field), a go-around started below the coverage floor shows as a
+# gap at the bottom of the approach followed by a climb. The go-around
+# pipeline measures that gap as level time at the low point and calls the
+# climb-away a low approach / ambiguous. When the time NOT hidden by gaps
+# is within the go-around cutoff (LEVEL_GA_MAX_S), the event is a
+# go-around. A low pass that is actually SEEN level for longer stays a
+# low approach. Gaps longer than GA_HIDDEN_GAP_MIN_S count as hidden time.
+GA_HIDDEN_LOW_POINT_AS_GO_AROUND = True
+GA_HIDDEN_GAP_MIN_S = 5.0
+
 # ---------------------------------------------------- separation tiers ----
 # (horizontal NM, vertical ft). Basis in section 5.
 TIERS = {

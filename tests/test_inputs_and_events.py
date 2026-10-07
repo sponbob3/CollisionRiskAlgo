@@ -106,3 +106,91 @@ def test_touch_and_goes_are_events_with_their_own_name():
     # landing controls are kept away from touch-and-goes too
     ctl = events.control_table(app, 10, 30)
     assert len(ctl) == 0          # the only full stop is 30 min from events
+
+
+# ------------------------------------------------- hidden low point ----
+
+def _climb_away(outcome, level_s, sample_times):
+    """A classified climb-away: climb start at t = 100 s, plateau of
+    level_s before it, raw samples at sample_times (s)."""
+    import types
+    t0 = pd.Timestamp("2025-01-01 12:00", tz="UTC")
+    ts = t0 + pd.to_timedelta(np.asarray(sample_times, float), unit="s")
+    leg = pd.DataFrame({"timestamp": ts})
+    return types.SimpleNamespace(
+        approach=types.SimpleNamespace(data=leg), outcome=outcome,
+        climb_start=t0 + pd.Timedelta(seconds=100),
+        level_low_duration_s=float(level_s))
+
+
+def test_hidden_low_point_measurement():
+    # 1 Hz down to t=55, nothing until the climb reappears at t=95
+    times = list(range(0, 56)) + list(range(95, 130))
+    r = _climb_away("low_approach", 48.0, times)
+    hidden, observed = ga.hidden_low_point(r)
+    assert hidden == pytest.approx(40.0)
+    assert observed == pytest.approx(8.0)
+    # a low pass seen level at 1 Hz the whole time: nothing hidden
+    r = _climb_away("low_approach", 48.0, range(0, 130))
+    assert ga.hidden_low_point(r) == (0.0, 48.0)
+
+
+def test_hidden_low_point_rule(monkeypatch):
+    from goaround_pipeline import classify as gc
+    cases = {
+        # (vendored outcome, plateau s, samples) -> expected outcome
+        "hidden": (("low_approach", 48.0,
+                    list(range(0, 56)) + list(range(95, 130))), "go_around"),
+        "seen_level": (("low_approach", 48.0, range(0, 130)),
+                       "low_approach"),
+        "ambiguous_hidden": (("ga_ambiguous", 25.0,
+                              list(range(0, 80)) + list(range(88, 130))),
+                             "go_around"),
+        "too_long_seen": (("low_approach", 60.0,
+                           list(range(0, 75)) + list(range(85, 130))),
+                          "low_approach"),     # 50 s still observed level
+        "full_stop": (("full_stop", 60.0,
+                       list(range(0, 50)) + list(range(99, 130))),
+                      "full_stop"),
+    }
+    for name, ((outcome, level, times), want) in cases.items():
+        fake = _climb_away(outcome, level, times)
+        monkeypatch.setattr(gc, "classify_approach", lambda app, f=fake: f)
+        r = ga.classify_approach(None)
+        assert r.outcome == want, name
+        if want != outcome:
+            assert r.reclassified_from == outcome
+    # the rule can be switched off
+    monkeypatch.setattr(config, "GA_HIDDEN_LOW_POINT_AS_GO_AROUND", False)
+    fake = _climb_away("low_approach", 48.0,
+                       list(range(0, 56)) + list(range(95, 130)))
+    monkeypatch.setattr(gc, "classify_approach", lambda app: fake)
+    assert ga.classify_approach(None).outcome == "low_approach"
+
+
+@pytest.mark.slow
+def test_go_arounds_below_coverage_floor(synth_dataset, kbna, tmp_path):
+    """Synthetic days with every sample below 600 ft above field within
+    5 NM removed (a KMCO-like coverage floor): go-arounds initiated below
+    the floor are recovered as go-arounds by the rule."""
+    from proximity_pipeline.profile_setup import _distance_nm
+    floor = tmp_path / "KBNA_floor"
+    floor.mkdir()
+    elev = ga.config.FIELD_ELEVATION_FT
+    lat0, lon0 = ga.config.AIRPORT_LATLON
+    for f in ga.data_files(synth_dataset):
+        d = pd.read_parquet(f)
+        dist = _distance_nm(d["latitude"].to_numpy(), d["longitude"].to_numpy(),
+                            lat0, lon0)
+        hidden = (dist < 5.0) & (d["geoaltitude"] - elev < 600.0)
+        d[~hidden].to_parquet(floor / f.name, index=False)
+    truth = pd.read_json(synth_dataset / "truth_go_arounds.json")
+    out = ga.run_goaround(floor, tmp_path / "ga", plots=False, quiet=True,
+                          argv=["test"])
+    found = out[out["outcome"] == "go_around"]
+    rescued = found[found["reclassified_from"] != ""]
+    assert len(rescued) > 0                    # the rule was needed
+    assert (rescued["low_point_hidden_s"] > 0).all()
+    assert set(found["callsign"]) >= set(truth["callsign"]) - set(
+        out[out["outcome"] == "unresolved"]["callsign"])
+    assert not (out["outcome"] == "low_approach").any()

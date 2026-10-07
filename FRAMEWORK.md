@@ -634,7 +634,8 @@ computation.
 - The adapter reproduces GoAroundAlgo's `run_analysis.py` behaviour: load
   the airport profile, set the output directory, dump `run_config.txt`,
   run the pipeline, write summaries (and optional report / calibration).
-  Outputs must be identical to a GoAroundAlgo run on the same data.
+  With the two deliberate additions below switched off, outputs are
+  identical to a GoAroundAlgo run on the same data (test 8).
 - Airport profiles use the same YAML format; the `airspace:` block (§3.2)
   and an optional `flows:` block (§8.4) are additions that the go-around
   loader ignores.
@@ -643,7 +644,28 @@ computation.
   the position-freshness filter, §4.2). The go-around stage gets them for
   the duration of its run, without editing the vendored files. On files
   without a position-time column `load_day()` is the vendored loader
-  exactly, so parity with GoAroundAlgo (test 8) holds.
+  exactly.
+- **Hidden low point = go-around** (go-around stage only;
+  `GA_HIDDEN_LOW_POINT_AS_GO_AROUND`). Where ADS-B coverage ends above
+  the runway (first KMCO test day: ~530 ft above field), a go-around
+  started below the coverage floor shows as a data gap at the bottom of
+  the approach followed by a climb, and the go-around pipeline measures
+  the gap as level time at the low point, calling the climb-away a
+  `low_approach` or `ga_ambiguous`. The adapter's classifier hook
+  subtracts the hidden time (report gaps longer than 5 s inside the
+  plateau, from the last descent into the low band to the climb start)
+  from the measured plateau; if the level time actually observed is
+  within the go-around cutoff (`LEVEL_GA_MAX_S`, 20 s), the climb-away is
+  a `go_around`. A low pass actually seen level for longer stays a
+  `low_approach`, so training airports with genuine low approaches keep
+  them. A touch-and-go whose touchdown is hidden below the coverage floor
+  becomes a go-around; both are events (§10), so the proximity analysis
+  is unaffected. Reclassified approaches carry `reclassified_from` and
+  `low_point_hidden_s` in `all_approaches.csv` and
+  `go_around_events.csv`. On synthetic traffic with every sample below
+  600 ft within 5 NM removed, the rule recovered all 11 true go-arounds
+  (4 without it, 7 mislabelled low approaches) with no false positives,
+  and it changes nothing on data with full coverage.
 - Updating the vendored copy later = replace the folder, update
   `VENDORED_FROM.txt`, re-run the test suite.
 
@@ -764,7 +786,7 @@ Output layout:
 
 ```
 output/KBNA/
-  goaround/run_NN/                 exact go-around pipeline outputs
+  goaround/run_NN/                 go-around pipeline outputs (§13)
   proximity_risk/
     baseline/<label>/              stored baseline (§9.6)
     cache/<label>/<day>.parquet    per-day pairwise results (param-hashed)
@@ -882,7 +904,7 @@ The method must be shown to work on data where the answer is known:
    rate increase (e.g. IRR = 1.5) is detected; with no injected effect,
    the false-positive rate is ≈ α across repeated simulations.
 8. **Go-around parity**: the adapter reproduces GoAroundAlgo outputs on a
-   small fixture.
+   small fixture (hidden-low-point rule off).
 9. **Traffic cross-check**: `validate_cpa.py` closest-approach distances
    agree with the traffic library on sample days.
 10. **Input handling**: daily files are found in month subfolders; a
@@ -893,6 +915,11 @@ The method must be shown to work on data where the answer is known:
 12. **Automatic profile**: created offline from a stubbed OurAirports
     database and the synthetic data (timezone, preset, arrivals
     assumption, runways, airspace block), never overwritten.
+13. **Hidden low point**: the hidden/observed plateau split is exact on
+    constructed tracks; only climb-aways whose observed level time is
+    within the cutoff are reclassified; on synthetic days with a 600 ft
+    coverage floor every true go-around is recovered with no low
+    approaches left.
 
 ---
 
