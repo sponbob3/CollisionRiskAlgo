@@ -11,7 +11,7 @@ pyyaml
 pyproj
 traffic
 httpx         # airport database download (also a traffic dependency)
-timezonefinder  # airport timezone from coordinates (automatic profiles)
+airportsdata  # airport timezone for automatic profiles (pure Python)
 rich          # imported by some traffic releases without being declared
 reportlab
 pypdf

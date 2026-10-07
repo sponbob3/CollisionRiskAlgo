@@ -16,13 +16,13 @@ every threshold is a named, documented parameter in
 
 ## Quick start
 
-Python 3.11 or newer (the same environment as the go-around pipeline).
+Python 3.12 (3.11 also works). Python 3.13+ is not yet supported by all
+of the traffic library's dependencies, which then have to be compiled.
 
 ```bash
-python3 --version                  # must be 3.11 or newer (macOS's own
-                                   # python3 may be 3.9: install 3.12 from
-                                   # python.org or with Homebrew)
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 --version               # install Python 3.12 from python.org
+                                   # (or: brew install python@3.12)
+python3.12 -m venv .venv && source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 # every new terminal: source .venv/bin/activate  (prompt shows "(.venv)")

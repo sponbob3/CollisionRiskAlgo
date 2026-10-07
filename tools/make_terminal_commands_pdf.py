@@ -29,18 +29,20 @@ COMMANDS = [
         ("git clone https://github.com/sponbob3/CollisionRiskAlgo.git\n"
          "cd CollisionRiskAlgo",
          "Get the repository."),
-        ("python3 --version",
-         "Must print 3.11 or newer. The python3 that ships with macOS can be "
-         "3.9, which is too old: install Python 3.12 from python.org (or "
-         "brew install python@3.12) and open a new terminal."),
-        ("python3 -m venv .venv\n"
+        ("python3.12 --version",
+         "Use Python 3.12 (3.11 also works). If the command is not found, "
+         "install Python 3.12 from python.org (or brew install "
+         "python@3.12) and open a new terminal. Other versions can stay "
+         "installed: macOS's own python3 may be too old (3.9), and Python "
+         "3.13+ is too new for some of the traffic library's dependencies."),
+        ("python3.12 -m venv .venv\n"
          "source .venv/bin/activate\n"
          "# Windows: .venv\\Scripts\\activate\n"
          "python -m pip install --upgrade pip\n"
          "python -m pip install -r requirements.txt",
          "Create the virtual environment and install every dependency (the "
          "same packages as the go-around pipeline plus scipy, statsmodels, "
-         "pyproj, timezonefinder and pytest). 'python -m pip' works even "
+         "pyproj, airportsdata and pytest). 'python -m pip' works even "
          "where a bare 'pip' command is not found."),
         ("source .venv/bin/activate",
          "Run this in every NEW terminal window, inside the repository, "

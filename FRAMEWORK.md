@@ -714,7 +714,8 @@ creates it with no manual editing:
   coordinates; true bearing = geodesic azimuth between the two ends) from
   the OurAirports database (ourairports.com, falling back to its GitHub
   mirror), cached in `airports/.ourairports/`;
-- `timezone` from the airport coordinates (timezonefinder);
+- `timezone` from the airportsdata table (offline, pure Python;
+  timezonefinder on the coordinates as an optional fallback);
 - `preset` from the data: median groundspeed on final approach
   (descending within 4 NM, 200–1,500 ft above field, up to 5 days spread
   over the dataset); ≥ 100 kt → `air_carrier`, else `training_ga`.
