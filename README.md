@@ -45,8 +45,8 @@ One run writes two fresh numbered folders with the same number:
 | folder | content |
 |---|---|
 | `output/KBNA/goaround/run_NN/` | the go-around pipeline's outputs (`all_approaches.csv`, `go_around_events.csv`, `summary.pdf`, per-event plots, `run_config.txt`); climb-aways whose low point was hidden below the ADS-B coverage floor are go-arounds (`reclassified_from`, `low_point_hidden_s` columns; FRAMEWORK.md section 13) |
-| `output/KBNA/proximity_risk/run_NN/` | `summary.pdf` (verdicts on page 1), `results_primary.csv` (IRR / SIR per endpoint and scope), `go_around_risk.csv` (one row per go-around or touch-and-go), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around or touch-and-go), `run_config.txt` |
-| `output/KBNA/proximity_risk/baseline/<label>/` | the stored, validated baseline (`baseline.json`, `baseline_windows.parquet`, `error_model.csv`, `phase1_removed.csv`, `validation/`, `baseline_report.pdf`), reused automatically while the data and parameters match |
+| `output/KBNA/proximity_risk/run_NN/` | `summary.pdf` (key results in plain sentences, checks and a glossary on page 1; every figure captioned), `change_summary.csv` (totals, traffic, and the same change around normal landings), `go_around_aircraft.csv` (the event aircraft vs other aircraft), `results_primary.csv` (rates per unit of traffic: IRR / SIR per endpoint), `go_around_risk.csv` (one row per go-around or touch-and-go), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around or touch-and-go), `run_config.txt` |
+| `output/KBNA/proximity_risk/baseline/<label>/` | the stored, validated baseline (`baseline.json`, `baseline_windows.parquet`, `phase1_removed.csv`, `validation/`, `baseline_report.pdf`), reused automatically while the data and parameters match |
 
 Every command and option, with examples, is in **TERMINAL_COMMANDS.pdf**
 (regenerate with `python tools/make_terminal_commands_pdf.py`).
@@ -72,10 +72,12 @@ scores the pre and post windows of every go-around. Post vs pre gives a
 rate ratio from a conditional likelihood with event fixed effects and a
 day-clustered bootstrap CI; post vs baseline gives a standardised
 incidence ratio with a day-block bootstrap CI; Wilcoxon tests confirm
-both. The same is done for encounters involving the go-around aircraft
-against matched full-stop landings. A Paielli & Erzberger conflict
-probability with data-estimated errors gives expected conflicts and its
-own calibration report. A one-at-a-time sensitivity sweep re-runs the
+both. Because a go-around may itself add traffic, the totals and the
+traffic change are reported too, next to the same before-to-after change
+around normal landings at the same hours of day, and the go-around
+aircraft's own encounters are compared with those of the other aircraft
+present. A Paielli & Erzberger conflict-probability model is available
+as an optional add-on (`--probability`). A one-at-a-time sensitivity sweep re-runs the
 analysis over window, radius, ceiling, lookahead, tier thresholds,
 event set, geometry and baseline exclusion without repeating the
 pairwise computation.
@@ -119,7 +121,8 @@ proximity_pipeline/
   loading.py                  cleaning, 1 s grid, projection, data audit
   pairs.py                    zone-entry intervals, pruning, encounters
   geometry.py                 flight phases, geometry classes
-  probability.py              error model, conflict probability, calibration
+  probability.py              optional add-on: conflict probability (--probability)
+  labels.py                   plain-language labels for figures and reports
   windows.py                  window metrics, exposure, quality, flows
   baseline.py                 regression baseline, Phase I/II, validation
   events.py                   event windows, clusters, matched controls

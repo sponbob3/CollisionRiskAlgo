@@ -442,7 +442,9 @@ def interval_metrics(intervals: pd.DataFrame, exposure: Exposure,
     local = start.dt.tz_convert(ga.config.LOCAL_TZ)
     out["local_hour"] = local.dt.hour
     out["daytype"] = np.where(local.dt.dayofweek >= 5, "weekend", "weekday")
-    out["month"] = local.dt.strftime("%Y-%m")
+    # month of the data (UTC, like the daily files): local time would put
+    # the first evening of a dataset into the previous month
+    out["month"] = start.dt.strftime("%Y-%m")
     centres = ((out["t_start"] + out["t_end"]) / 2.0).to_numpy()
     out["flow"] = flow_labels(centres, usage)
     # encounters and severity

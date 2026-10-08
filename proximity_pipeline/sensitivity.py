@@ -3,8 +3,8 @@ Sensitivity analysis (FRAMEWORK.md section 12): one-at-a-time variations
 of window length, radius, ceiling, lookahead, tier thresholds, event set,
 geometry classes and baseline exclusion, each re-running the analysis
 (baseline refit without validation, fewer bootstrap replicates) and
-reporting IRR and SIR with intervals for the primary endpoint in both
-scopes. The pairwise computation is never repeated: every variation is a
+reporting the total-encounter ratio, IRR and SIR with intervals for the
+primary endpoint. The pairwise computation is never repeated: every variation is a
 filter on the per-day caches.
 """
 
@@ -21,7 +21,8 @@ from . import windows as W
 from .pipeline import analyse
 
 COLUMNS = ["parameter", "value", "is_base", "scope", "endpoint",
-           "event_set", "n_events", "irr", "irr_lo", "irr_hi", "sir_pre",
+           "event_set", "n_events", "total_ratio", "total_ratio_lo",
+           "total_ratio_hi", "irr", "irr_lo", "irr_hi", "sir_pre",
            "sir_pre_lo", "sir_pre_hi", "sir_post", "sir_post_lo",
            "sir_post_hi", "baseline_model", "elapsed_s"]
 
@@ -30,7 +31,10 @@ def _rows(param, value, res, endpoint="T1_any", event_set="all",
           is_base=False, elapsed=np.nan) -> list[dict]:
     rows = []
     r = res["results"]
-    for scope in ("airspace", "ga_involved"):
+    ch = res["change"].set_index("measure") if len(res["change"]) else None
+    tot = (ch.loc["T1_any"] if ch is not None and "T1_any" in ch.index
+           and endpoint == "T1_any" and event_set == "all" else None)
+    for scope in ("airspace",):
         sel = r[(r["scope"] == scope) & (r["endpoint"] == endpoint)
                 & (r["event_set"] == event_set)]
         if sel.empty:
@@ -39,6 +43,11 @@ def _rows(param, value, res, endpoint="T1_any", event_set="all",
         rows.append({"parameter": param, "value": value, "is_base": is_base,
                      "scope": scope, "endpoint": endpoint,
                      "event_set": event_set, "n_events": x["n_events"],
+                     "total_ratio": tot["ratio"] if tot is not None else np.nan,
+                     "total_ratio_lo": (tot["ratio_lo"] if tot is not None
+                                        else np.nan),
+                     "total_ratio_hi": (tot["ratio_hi"] if tot is not None
+                                        else np.nan),
                      "irr": x["irr"], "irr_lo": x["irr_lo"],
                      "irr_hi": x["irr_hi"], "sir_pre": x["sir_pre"],
                      "sir_pre_lo": x["sir_pre_lo"],
@@ -51,7 +60,7 @@ def _rows(param, value, res, endpoint="T1_any", event_set="all",
     return rows
 
 
-def sweep(days: dict, app: pd.DataFrame, error_model, ev: pd.DataFrame,
+def sweep(days: dict, app: pd.DataFrame, ev: pd.DataFrame,
           ctl: pd.DataFrame, window_min: float, spec: W.Spec,
           effective_ceiling: float, charted_ceiling: float,
           outcomes: tuple, base_res: dict) -> pd.DataFrame:
@@ -113,13 +122,14 @@ def sweep(days: dict, app: pd.DataFrame, error_model, ev: pd.DataFrame,
         c = E.control_table(app, w, ex, config.CONTROL_MAX_EVENTS,
                             config.RANDOM_SEED)
         try:
-            res = analyse(days, app, sp, error_model, e, c, w, ex, None,
+            res = analyse(days, app, sp, e, c, w, ex, None,
                           rebuild=True, validate=False, reps=reps, quiet=True)
             rows += _rows(param, value, res, elapsed=round(time.time() - t, 1))
-            r = [x for x in rows[-2:] if x["scope"] == "airspace"]
-            msg = (f"IRR {r[0]['irr']:.2f} [{r[0]['irr_lo']:.2f}, "
-                   f"{r[0]['irr_hi']:.2f}]  SIR_post {r[0]['sir_post']:.2f}"
-                   if r else "no result")
+            r = [x for x in rows[-1:] if x["scope"] == "airspace"]
+            msg = (f"total T1 after/before {r[0]['total_ratio']:.2f}  "
+                   f"per traffic {r[0]['irr']:.2f} [{r[0]['irr_lo']:.2f}, "
+                   f"{r[0]['irr_hi']:.2f}]  after vs normal "
+                   f"{r[0]['sir_post']:.2f}" if r else "no result")
         except Exception as err:   # report, never absorb
             rows.append({"parameter": param, "value": value, "is_base": False,
                          "scope": "airspace", "endpoint": "T1_any",

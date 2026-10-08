@@ -44,6 +44,9 @@ def continuous_metrics(tiers) -> list[str]:
 
 
 PRIMARY_METRIC = "T1_any"
+# bumped when the baseline's inputs change meaning (2: UTC month covariate,
+# no probability-model metrics), so stored baselines are rebuilt
+BASELINE_VERSION = 2
 S_MIN_CAP = 1.25     # s_min is undefined without a close pair: capped here
 
 
@@ -716,7 +719,8 @@ class Baseline:
 
 def baseline_param_hash(extra: dict | None = None) -> str:
     from .pipeline import param_hash, day_param_hash
-    d = {"day": day_param_hash(), "base": param_hash(BASELINE_PARAMS)}
+    d = {"day": day_param_hash(), "base": param_hash(BASELINE_PARAMS),
+         "version": BASELINE_VERSION}
     if extra:
         d.update(extra)
     return hashlib.sha256(json.dumps(d, sort_keys=True).encode()
@@ -881,7 +885,9 @@ def save_baseline(bl: Baseline, folder: Path, error_model: pd.DataFrame,
     (folder / "baseline.json").write_text(
         json.dumps(bl.to_json(), indent=1, default=_json_default))
     bl.windows.to_parquet(folder / "baseline_windows.parquet", index=False)
-    error_model.to_csv(folder / "error_model.csv", index=False)
+    if error_model is not None and len(error_model):
+        # only with the optional probability add-on (--probability)
+        error_model.to_csv(folder / "error_model.csv", index=False)
     bl.phase1_removed.to_csv(folder / "phase1_removed.csv", index=False)
     val = folder / "validation"
     val.mkdir(exist_ok=True)

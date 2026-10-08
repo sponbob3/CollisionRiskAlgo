@@ -109,6 +109,14 @@ COMMANDS = [
          "python run_proximity.py KMCO_2025Q1 --window 15",
          "Pre/post window length in minutes (default 10; the sweep runs "
          "5 and 15 anyway)."),
+        ("python run_proximity.py KMCO_2025Q1 --goaround-run 1 "
+         "--no-sensitivity",
+         "Re-run the analysis on existing go-around results and caches "
+         "(fastest way to get a new summary.pdf)."),
+        ("python run_proximity.py KMCO_2025Q1 --probability",
+         "Optional add-on: also run the conflict-probability model; its "
+         "outputs go to proximity_risk/run_NN/probability/ and are not "
+         "part of the summary."),
         ("python run_proximity.py KMCO_2025Q1 --include-ambiguous",
          "Events are go-arounds and touch-and-goes (each keeps its own "
          "name; results are also given per type). This adds ga_ambiguous "
@@ -166,9 +174,10 @@ COMMANDS = [
         ("output/KMCO/proximity_risk/run_NN/",
          "run_config.txt, ceiling_check.csv, data_quality.csv, "
          "window_metrics.parquet, encounters.parquet/.csv, "
-         "go_around_risk.csv (+ _involved), results_primary.csv, "
-         "equilibrium.csv, epoch.csv, sensitivity.csv, figures/, events/, "
-         "summary.pdf."),
+         "go_around_risk.csv, change_summary.csv, go_around_aircraft.csv, "
+         "results_primary.csv, equilibrium.csv, epoch.csv, sensitivity.csv, "
+         "figures/, events/, summary.pdf (start here: key results and a "
+         "glossary on page 1)."),
     ]),
 ]
 

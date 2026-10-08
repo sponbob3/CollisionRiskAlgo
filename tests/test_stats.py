@@ -100,16 +100,24 @@ def test_end_to_end_run_detects_injected_increase(effect_dataset, kbna,
         goaround_run=None, rebuild_baseline=False, baseline_only=False,
         baseline_from=None, window=None, include_ambiguous=False,
         no_sensitivity=True, no_plots=True, no_event_plots=True,
-        goaround_report=False, calibrate=False, limit=None, workers=2)
+        goaround_report=False, calibrate=False, limit=None, workers=2,
+        probability=False)
     run_dir = pipeline.run_all(effect_dataset, args, ["test"])
     for name in ("run_config.txt", "ceiling_check.csv", "data_quality.csv",
                  "window_metrics.parquet", "encounters.parquet",
                  "encounters.csv", "go_around_risk.csv",
-                 "results_primary.csv", "equilibrium.csv", "epoch.csv"):
+                 "results_primary.csv", "equilibrium.csv", "epoch.csv",
+                 "change_summary.csv", "go_around_aircraft.csv"):
         assert (run_dir / name).exists(), name
     base = config.OUTPUT_DIR / "KBNA" / "proximity_risk" / "baseline" / "effecttest"
     assert (base / "baseline.json").exists()
-    assert (base / "error_model.csv").exists()
+    # the probability model is an add-on (--probability), off by default
+    assert not (base / "error_model.csv").exists()
+    assert not (run_dir / "probability").exists()
+    ch = pd.read_csv(run_dir / "change_summary.csv").set_index("measure")
+    t1 = ch.loc["T1_any"]
+    assert t1["ratio"] == pytest.approx(t1["after_total"] / t1["before_total"])
+    assert np.isfinite(t1["normal_ratio"]) and np.isfinite(t1["vs_normal"])
     enc = pd.read_parquet(run_dir / "encounters.parquet")
     inj = enc[enc["callsign_a"].str.startswith("INT")
               & enc["callsign_b"].str.startswith("INT")
@@ -138,9 +146,64 @@ def test_end_to_end_run_detects_injected_increase(effect_dataset, kbna,
     assert "baseline_reused = True" in txt
     for name in ("summary.pdf", "figures/superposed_epoch.png",
                  "figures/forest.png", "figures/equilibrium.png",
-                 "figures/control_chart.png", "figures/encounter_density.png",
+                 "figures/daily_levels.png", "figures/encounter_density.png",
+                 "figures/change_vs_normal.png",
                  "figures/ceiling_check.png"):
         assert (run2 / name).exists(), name
     assert len(list((run2 / "events").glob("*.png"))) == len(risk)
     assert (base / "baseline_report.pdf").exists()
     assert (base / "validation" / "calibration_exceedance.png").exists()
+
+
+def _pairs(pre, post, hours, days, col="T1_any"):
+    return pd.DataFrame({"event_id": [f"e{i}" for i in range(len(pre))],
+                         f"pre_{col}": pre, f"post_{col}": post,
+                         "hour": hours, "day": days, "excluded": False})
+
+
+def test_change_summary_totals_and_normal_landings(monkeypatch):
+    """Totals ratio = sum after / sum before; normal landings are
+    weighted to the go-arounds' hours; vs-normal = the ratio of the two."""
+    monkeypatch.setattr(stats, "CHANGE_MEASURES",
+                        [("T1_any", "T1_any", "T1 encounters")])
+    ga = _pairs([10, 10, 10, 10], [15, 15, 15, 15], [8, 8, 17, 17],
+                ["d1", "d2", "d3", "d4"])
+    # normal landings: at 08 h nothing changes, at 17 h counts halve, and
+    # a 03 h landing (no go-around at that hour) must get zero weight
+    ctl = _pairs([10, 10, 10, 10, 50], [10, 10, 5, 5, 500],
+                 [8, 8, 17, 17, 3], ["d1", "d2", "d3", "d4", "d1"])
+    out = stats.change_summary(ga, ctl, reps=200, seed=1).iloc[0]
+    assert out["ratio"] == pytest.approx(1.5)
+    assert out["normal_ratio"] == pytest.approx(30 / 40)
+    assert out["vs_normal"] == pytest.approx(1.5 / 0.75)
+    assert out["n_controls"] == 4
+    assert out["ratio_lo"] <= 1.5 <= out["ratio_hi"]
+
+
+def test_go_around_aircraft_involvement():
+    """The go-around aircraft's encounters vs an average aircraft in the
+    same window: here every aircraft is in 2 encounters per 600 s, so
+    the ratio is 1; doubling its own encounters doubles the ratio."""
+    ewm = pd.DataFrame({"event_id": ["e0", "e0"], "window": ["pre", "post"],
+                        "T1_any": [10, 10], "aircraft_s": [6000, 6000],
+                        "day": ["d1", "d1"], "t_start": [0, 600],
+                        "t_end": [600, 1200]})
+    # 10 aircraft x 600 s; 10 encounters -> 20 involvements -> 2 per aircraft
+    einv = ewm.copy()
+    einv["T1_any"] = [2, 4]
+    einv["own_present_s"] = [600, 600]
+    risk = pd.DataFrame({"event_id": ["e0"], "excluded": [False]})
+    out = stats.ga_aircraft_involvement(ewm, einv, risk, {"T1": (3, 1000)},
+                                        reps=50, seed=0).set_index("window")
+    assert out.loc["pre", "ratio"] == pytest.approx(1.0)
+    assert out.loc["post", "ratio"] == pytest.approx(4 / (600 * 16 / 5400))
+    assert out.loc["post", "share_of_window_in_area"] == pytest.approx(1.0)
+
+
+def test_plain_labels():
+    from proximity_pipeline import labels as L
+    assert L.metric("T2_predicted") == "T2 close encounters, predicted"
+    assert L.sensitivity_row("window_min", 5.0) == "Window 5 min"
+    assert L.sensitivity_row("T1_H", "x0.75") == "T1 horizontal size ×0.75"
+    assert L.sensitivity_row("ceiling_ft_agl", 2500.0) == "Ceiling 2,500 ft"
+    assert "_" not in L.sensitivity_row("event_set", "include_ambiguous")

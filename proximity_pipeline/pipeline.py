@@ -310,16 +310,17 @@ class Run:
         self.tables: dict = {}
 
 
-def analyse(days: dict, app: pd.DataFrame, spec, error_model, ev: pd.DataFrame,
+def analyse(days: dict, app: pd.DataFrame, spec, ev: pd.DataFrame,
             ctl: pd.DataFrame, window_min: float, exclusion_min: float,
             baseline_dir: Path | None, rebuild: bool, validate: bool,
             reps: int, quiet: bool = False, ds_sig: str = "",
-            baseline_from: Path | None = None) -> dict:
+            baseline_from: Path | None = None,
+            error_model=None) -> dict:
     """Encounters -> windows -> baseline -> events -> statistics for one
     Spec. Returns a dict of tables (the sensitivity sweep calls this with
-    varied inputs and validate=False)."""
+    varied inputs and validate=False). The conflict-probability model
+    (section 7) runs only when an error_model is given (--probability)."""
     from . import windows as W, events as E, stats as S, baseline as B
-    from . import probability as P
     tiers = spec.tiers
     exp = W.Exposure(days, spec)
     enc = pd.concat([W.day_encounters(dc, spec) for dc in days.values()],
@@ -328,15 +329,21 @@ def analyse(days: dict, app: pd.DataFrame, spec, error_model, ev: pd.DataFrame,
     enc = E.tag_encounters(enc, ctl, "ctl")
     usage = W.runway_usage(app, days)
 
-    # conflict probabilities (section 7) per tier
-    prob_tables = {tier: {d: P.day_pair_probabilities(dc, spec, error_model,
-                                                      tier)
-                          for d, dc in days.items()}
-                   for tier in tiers}
-    calib = {tier: P.calibration_from_tables(prob_tables[tier])
-             for tier in tiers}
+    # optional add-on: conflict probabilities (section 7) per tier
+    prob_tables, calib = {}, {}
+    if error_model is not None:
+        from . import probability as P
+        prob_tables = {tier: {d: P.day_pair_probabilities(dc, spec,
+                                                          error_model, tier)
+                              for d, dc in days.items()}
+                       for tier in tiers}
+        calib = {tier: P.calibration_from_tables(prob_tables[tier])
+                 for tier in tiers}
 
     def expected_cols(intervals):
+        if not prob_tables:
+            return None
+        from . import probability as P
         return pd.DataFrame({
             f"expected_conflicts_{tier}": P.expected_conflicts(
                 prob_tables[tier], intervals, tier) for tier in tiers},
@@ -346,7 +353,7 @@ def analyse(days: dict, app: pd.DataFrame, spec, error_model, ev: pd.DataFrame,
     clock = W.clock_windows(days, window_min)
     wm = W.interval_metrics(clock, exp, enc, days, usage, expected_cols(clock))
 
-    # baseline, airspace scope (section 9)
+    # baseline (section 9)
     t_excl = E.event_table(app, config.EVENT_OUTCOMES_AMBIGUOUS,
                            window_min)["t0"].to_numpy()
     bl = None
@@ -355,7 +362,8 @@ def analyse(days: dict, app: pd.DataFrame, spec, error_model, ev: pd.DataFrame,
         bl = B.load_baseline(baseline_from)
         reused = True
     elif baseline_dir is not None and not rebuild:
-        if B.baseline_is_reusable(baseline_dir, baseline_param_hash_for(spec, window_min, exclusion_min), ds_sig):
+        if B.baseline_is_reusable(baseline_dir, baseline_param_hash_for(
+                spec, window_min, exclusion_min), ds_sig):
             bl = B.load_baseline(baseline_dir)
             reused = True
             if not quiet:
@@ -364,7 +372,7 @@ def analyse(days: dict, app: pd.DataFrame, spec, error_model, ev: pd.DataFrame,
         bl = B.build_baseline(wm, t_excl, tiers, "airspace", validate,
                               exclusion_min, quiet=quiet)
 
-    # event windows, airspace scope (sections 10-11)
+    # event windows (sections 10-11)
     ew = E.event_windows(ev)
     ewm = W.interval_metrics(ew, exp, enc, days, usage, expected_cols(ew))
     ewm["day"] = [_day_of(int(t), days) for t in ewm["t_start"]]
@@ -373,53 +381,49 @@ def analyse(days: dict, app: pd.DataFrame, spec, error_model, ev: pd.DataFrame,
     risk = S.event_risk_table(scored, ev, metrics)
     risk["day"] = [_day_of(int(t), days) for t in risk["t0"]]
 
-    # go-around-involved scope against matched landing controls (9.7)
+    # normal landings at the same hours: the same windows, airspace-wide
+    # (data only, never plotted individually)
     cw = E.event_windows(ctl)
-    cwm = W.interval_metrics(cw, exp, enc, days, usage, expected_cols(cw))
+    cwm = W.interval_metrics(cw, exp, enc, days, usage)
     cwm["day"] = [_day_of(int(t), days) for t in cwm["t_start"]]
-    cinv = E.involved_frame(cwm, enc, ctl, exp, "ctl", tiers)
-    cinv["window_id"] = cinv["event_id"] + "_" + cinv["window"]
-    bl_inv = None
-    if baseline_from is not None and (baseline_from / "ga_involved" / "baseline.json").exists():
-        bl_inv = B.load_baseline(baseline_from / "ga_involved")
-    elif reused and baseline_dir is not None and (baseline_dir / "ga_involved" / "baseline.json").exists():
-        bl_inv = B.load_baseline(baseline_dir / "ga_involved")
-    if bl_inv is None:
-        bl_inv = B.build_baseline(cinv, np.array([]), tiers, "ga_involved",
-                                  validate, exclusion_min, quiet=quiet)
-    einv = E.involved_frame(ewm, enc, ev, exp, "ga", tiers)
-    scored_inv = S.score_event_windows(einv, bl_inv, config.RANDOM_SEED)
-    risk_inv = S.event_risk_table(scored_inv, ev, metrics)
-    risk_inv["day"] = risk["day"]
 
-    # statistics (section 11)
-    results, equil = [], []
-    for scope, r, b in (("airspace", risk, bl), ("ga_involved", risk_inv, bl_inv)):
-        eq = S.equilibrium(r)
-        eq["scope"] = scope
-        equil.append(eq)
-        results.append(S.primary_results(r, b, scope, "all", reps))
-        in_ctl = r[r[f"pre_{S.PRIMARY}_in_control"].fillna(False).astype(bool)]
-        if len(in_ctl):
-            results.append(S.primary_results(in_ctl, b, scope, "in_control_pre", reps))
-        # per event type (go-arounds only, touch-and-goes only) when the
-        # event set mixes types
-        if "outcome" in r.columns and r["outcome"].nunique() > 1:
-            for typ in config.EVENT_TYPE_BREAKDOWN:
-                sub = r[r["outcome"] == typ]
-                if len(sub):
-                    results.append(S.primary_results(sub, b, scope,
-                                                     f"{typ}_only", reps))
+    # statistics (section 11): per unit of traffic against the baseline
+    results = [S.primary_results(risk, bl, "airspace", "all", reps)]
+    in_ctl = risk[risk[f"pre_{S.PRIMARY}_in_control"].fillna(False)
+                  .astype(bool)]
+    if len(in_ctl):
+        results.append(S.primary_results(in_ctl, bl, "airspace",
+                                         "in_control_pre", reps))
+    if "outcome" in risk.columns and risk["outcome"].nunique() > 1:
+        for typ in config.EVENT_TYPE_BREAKDOWN:
+            sub = risk[risk["outcome"] == typ]
+            if len(sub):
+                results.append(S.primary_results(sub, bl, "airspace",
+                                                 f"{typ}_only", reps))
     results = pd.concat(results, ignore_index=True)
-    epoch = S.superposed_epoch(ev.assign(day=risk["day"].to_numpy()) if len(ev) else ev,
-                               exp, enc, wm, bl, S.PRIMARY, reps, config.RANDOM_SEED)
+    eq = S.equilibrium(risk)
+    eq["scope"] = "airspace"
+
+    # totals, traffic and the comparison with normal landings (11.6)
+    cols = ["aircraft_s", "pair_hours"] + [f"{t}_any" for t in tiers]
+    ga_pairs = S.paired_windows(ewm, ev, cols)
+    ctl_pairs = S.paired_windows(cwm, ctl, cols)
+    change = S.change_summary(ga_pairs, ctl_pairs, reps, config.RANDOM_SEED)
+
+    # the go-around aircraft itself vs the other aircraft present (11.7)
+    einv = E.involved_frame(ewm, enc, ev, exp, "ga", tiers)
+    involvement = S.ga_aircraft_involvement(ewm, einv, risk, tiers, reps,
+                                            config.RANDOM_SEED)
+
+    epoch = S.superposed_epoch(ev.assign(day=risk["day"].to_numpy())
+                               if len(ev) else ev, exp, enc, wm, bl,
+                               S.PRIMARY, reps, config.RANDOM_SEED)
     return {"spec": spec, "exposure": exp, "encounters": enc, "usage": usage,
-            "window_metrics": wm, "baseline": bl, "baseline_involved": bl_inv,
-            "baseline_reused": reused, "event_windows": scored,
-            "risk": risk, "risk_involved": risk_inv, "results": results,
-            "equilibrium": pd.DataFrame(equil), "epoch": epoch,
-            "calibration": calib, "prob_tables": prob_tables,
-            "control_windows": cinv}
+            "window_metrics": wm, "baseline": bl, "baseline_reused": reused,
+            "event_windows": scored, "risk": risk, "results": results,
+            "equilibrium": pd.DataFrame([eq]), "epoch": epoch,
+            "change": change, "involvement": involvement,
+            "calibration": calib, "prob_tables": prob_tables}
 
 
 def baseline_param_hash_for(spec, window_min: float, exclusion_min: float) -> str:
@@ -434,7 +438,7 @@ def baseline_param_hash_for(spec, window_min: float, exclusion_min: float) -> st
 
 def run_all(dataset: Path, args, argv: list[str]) -> Path:
     """The whole run (section 14)."""
-    from . import airspace, events as E, probability as P, windows as W
+    from . import airspace, events as E, windows as W
     from . import baseline as B
     t_run = time.time()
     dataset = Path(dataset)
@@ -506,10 +510,14 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
           f"({len(ev[ev['cluster_first']])} cluster-first), {len(ctl)} "
           f"matched landing controls")
 
-    # 4. error model (section 7.1)
-    err = pd.concat([dc.errors for dc in days.values()], ignore_index=True)
-    em_table = P.fit_error_model(err) if len(err) else pd.DataFrame()
-    error_model = P.ErrorModel(em_table)
+    # 4. optional add-on: error model for the conflict-probability model
+    #    (section 7; only with --probability)
+    em_table, error_model = pd.DataFrame(), None
+    if getattr(args, "probability", False):
+        from . import probability as P
+        err = pd.concat([dc.errors for dc in days.values()], ignore_index=True)
+        em_table = P.fit_error_model(err) if len(err) else pd.DataFrame()
+        error_model = P.ErrorModel(em_table)
 
     # 5-8. encounters, windows, baseline, events, statistics
     baseline_dir = px_base / "baseline" / label
@@ -521,18 +529,17 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
             raise FileNotFoundError(f"no stored baseline at {baseline_from}")
         print(f"baseline: scoring against {rel(baseline_from)}")
     print()
-    res = analyse(days, app, spec, error_model, ev, ctl, window_min,
+    res = analyse(days, app, spec, ev, ctl, window_min,
                   config.BASELINE_EXCLUSION_MIN, baseline_dir,
                   args.rebuild_baseline, validate=True,
                   reps=config.BOOTSTRAP_REPS, ds_sig=ds_sig,
-                  baseline_from=baseline_from)
-    bl, bl_inv = res["baseline"], res["baseline_involved"]
+                  baseline_from=baseline_from, error_model=error_model)
+    bl = res["baseline"]
     res["files"] = files
     res["heights"] = heights
     if not res["baseline_reused"] and baseline_from is None:
         ph = baseline_param_hash_for(spec, window_min, config.BASELINE_EXCLUSION_MIN)
         B.save_baseline(bl, baseline_dir, em_table, ph, ds_sig)
-        B.save_baseline(bl_inv, baseline_dir / "ga_involved", em_table, ph, ds_sig)
         print(f"baseline stored in {rel(baseline_dir)}")
     print(f"BASELINE: {bl.verdict}")
     for w in bl.warnings:
@@ -545,27 +552,15 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
         print(f"\nbaseline only: outputs in {rel(run_dir)}/")
         return run_dir
 
-    for _, eq in res["equilibrium"].iterrows():
-        print(f"EQUILIBRIUM [{eq['scope']}]: {eq['verdict']}  "
-              f"(pre in control {100 * eq['in_control_share']:.0f}%, "
-              f"SIR_pre {eq['sir_pre']:.2f} "
-              f"[{eq['sir_pre_ci'][0]:.2f}, {eq['sir_pre_ci'][1]:.2f}], "
-              f"KS p={eq['ks_p']:.2f})")
-    prim = res["results"][(res["results"]["endpoint"] == "T1_any")
-                          & (res["results"]["event_set"] == "all")]
-    for _, r in prim.iterrows():
-        print(f"PRIMARY [{r['scope']}]: IRR post/pre {r['irr']:.2f} "
-              f"[{r['irr_lo']:.2f}, {r['irr_hi']:.2f}]  SIR_post "
-              f"{r['sir_post']:.2f} [{r['sir_post_lo']:.2f}, "
-              f"{r['sir_post_hi']:.2f}]  n={r['n_events']}  "
-              f"MDE IRR {r['mde_irr']:.2f}")
+    for line in result_lines(res):
+        print(line)
 
     # 9. sensitivity sweep (section 12)
     sens = pd.DataFrame()
     if not args.no_sensitivity:
         from . import sensitivity as SENS
         print()
-        sens = SENS.sweep(days, app, error_model, ev, ctl, window_min, spec,
+        sens = SENS.sweep(days, app, ev, ctl, window_min, spec,
                           effective, charted, outcomes, res)
         sens.to_csv(run_dir / "sensitivity.csv", index=False)
 
@@ -588,8 +583,8 @@ def _write_common(run_dir, dataset, files, argv, res, chk, ev, ctl, heights,
     enc.to_csv(run_dir / "encounters.csv", index=False)
     risk = res["risk"].merge(heights, on="event_id", how="left")
     risk.to_csv(run_dir / "go_around_risk.csv", index=False)
-    res["risk_involved"].to_csv(run_dir / "go_around_risk_involved.csv",
-                                index=False)
+    res["change"].to_csv(run_dir / "change_summary.csv", index=False)
+    res["involvement"].to_csv(run_dir / "go_around_aircraft.csv", index=False)
     res["results"].to_csv(run_dir / "results_primary.csv", index=False)
     res["equilibrium"].to_csv(run_dir / "equilibrium.csv", index=False)
     res["epoch"].to_csv(run_dir / "epoch.csv", index=False)
@@ -623,12 +618,50 @@ def _write_common(run_dir, dataset, files, argv, res, chk, ev, ctl, heights,
         "baseline_reused": res["baseline_reused"],
         "baseline_verdict": bl.verdict,
         "baseline_warnings": bl.warnings,
-        "baseline_involved_verdict": res["baseline_involved"].verdict,
-        "probability_calibration_ece": {t: c["ece"] for t, c in
-                                        res["calibration"].items()},
+        "probability_model": ({t: c["ece"] for t, c in
+                               res["calibration"].items()}
+                              if res["calibration"] else "not run"),
         "elapsed_s": round(time.time() - t_run, 1),
     }
     dump_run_config(run_dir, dataset, len(files), argv, extra)
+
+
+def result_lines(res: dict) -> list[str]:
+    """Console summary of the main results, in plain words."""
+    out = []
+    eq = res["equilibrium"].iloc[0] if len(res["equilibrium"]) else None
+    if eq is not None:
+        out.append(f"BEFORE-GO-AROUND CHECK: {eq['verdict']}  "
+                   f"({100 * eq['in_control_share']:.0f}% of before-windows "
+                   f"in the normal range; observed/expected "
+                   f"{eq['sir_pre']:.2f} [{eq['sir_pre_ci'][0]:.2f}, "
+                   f"{eq['sir_pre_ci'][1]:.2f}])")
+    ch = res["change"].set_index("measure") if len(res["change"]) else None
+    if ch is not None:
+        for key in ("T1_any", "pair_time"):
+            if key in ch.index:
+                r = ch.loc[key]
+                out.append(f"{r['label'].upper()}: after/before "
+                           f"{r['ratio']:.2f} [{r['ratio_lo']:.2f}, "
+                           f"{r['ratio_hi']:.2f}]  (normal landings "
+                           f"{r['normal_ratio']:.2f}; go-around vs normal "
+                           f"{r['vs_normal']:.2f} [{r['vs_normal_lo']:.2f}, "
+                           f"{r['vs_normal_hi']:.2f}])")
+    prim = res["results"][(res["results"]["endpoint"] == "T1_any")
+                          & (res["results"]["event_set"] == "all")]
+    for _, r in prim.iterrows():
+        out.append(f"T1 PER UNIT OF TRAFFIC: after/before {r['irr']:.2f} "
+                   f"[{r['irr_lo']:.2f}, {r['irr_hi']:.2f}]  after vs normal "
+                   f"{r['sir_post']:.2f} [{r['sir_post_lo']:.2f}, "
+                   f"{r['sir_post_hi']:.2f}]  n={r['n_events']}")
+    inv = res["involvement"]
+    if len(inv):
+        for _, r in inv[inv["tier"] == "T1"].iterrows():
+            out.append(f"GO-AROUND AIRCRAFT ({r['window']}): involved in "
+                       f"{r['ratio']:.2f}x the T1 encounters of an average "
+                       f"aircraft present [{r['ratio_lo']:.2f}, "
+                       f"{r['ratio_hi']:.2f}]")
+    return out
 
 
 def _report(run_dir, res, chk, ev, days, em_table, args, baseline_dir,
@@ -638,11 +671,12 @@ def _report(run_dir, res, chk, ev, days, em_table, args, baseline_dir,
     from . import report_pdf, viz
     figdir = run_dir / "figures"
     figdir.mkdir(exist_ok=True)
-    viz.baseline_figures(res["baseline"], res["calibration"], em_table,
-                         baseline_dir / "validation")
+    viz.baseline_figures(res["baseline"], baseline_dir / "validation")
     if not args.baseline_from:
-        report_pdf.baseline_report(res["baseline"], res["baseline_involved"],
-                                   res["calibration"], em_table, baseline_dir)
+        report_pdf.baseline_report(res["baseline"], baseline_dir)
+    if res["calibration"]:
+        viz.probability_figure(res["calibration"], em_table,
+                               run_dir / "probability")
     if baseline_only:
         return
     viz.study_figures(res, chk, ev, figdir, sens)

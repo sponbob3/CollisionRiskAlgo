@@ -134,6 +134,10 @@ def main() -> None:
     ap.add_argument("--calibrate", action="store_true",
                     help="go-around stage also writes the plateau-duration "
                          "calibration histogram")
+    ap.add_argument("--probability", action="store_true",
+                    help="optional add-on: also run the conflict-probability "
+                         "model (error model, calibration) into "
+                         "proximity_risk/run_NN/probability/")
     ap.add_argument("--limit", type=int, metavar="N",
                     help="process only the first N daily files (testing)")
     ap.add_argument("--workers", type=int, metavar="N",

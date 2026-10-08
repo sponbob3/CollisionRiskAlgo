@@ -313,7 +313,13 @@ often procedurally separated operations).
 
 ---
 
-## 7. Probability model (Paielli & Erzberger)
+## 7. Probability model (Paielli & Erzberger) — optional add-on
+
+Not part of the standard run. On the KMCO data it was poorly calibrated
+and is not used for any result; it runs only with
+`python run_proximity.py <dataset> --probability`, and its outputs go to
+`proximity_risk/run_NN/probability/` (reliability figure, error model,
+calibration tables), never into `summary.pdf`.
 
 ### 7.1 Error model estimated from the data
 
@@ -395,7 +401,8 @@ they belong to. Counts by quality class are reported in every summary.
 ### 8.4 Operating covariates (per window)
 
 - local hour of day; weekday / weekend;
-- month (season);
+- month (season), by UTC date like the daily files (local time would put
+  the first evening of a dataset into the previous month);
 - **runway flow configuration** — the set of runway ends used for arrivals
   (and departures) within ±30 min, derived from the go-around pipeline's
   `all_approaches.csv` (and departure alignment), mapped to a small number
@@ -508,16 +515,18 @@ baseline-relevant parameters (hash) match; otherwise it is rebuilt.
 `--rebuild-baseline` forces a rebuild; `--baseline-from <ICAO>_<label>`
 scores events against another dataset's baseline for the same airport.
 
-### 9.7 Matched landing controls (go-around-involved scope)
+### 9.7 Normal landings (comparison group)
 
-The airspace-wide baseline has no natural equivalent for "encounters
-involving one specific aircraft". For the go-around-involved scope the
-control group is **normal arrivals**: approaches classified `full_stop` in
-`all_approaches.csv`, anchored at their low point, with the same pre/post
-windows, excluding any within ±30 min of a go-around. Encounters involving
-the control aircraft are counted exactly as for go-around aircraft. The
-same regression/validation machinery (§9.2–9.5) is applied, with
-covariates from the window.
+**Normal arrivals** — approaches classified `full_stop` in
+`all_approaches.csv`, anchored at their low point, with the same
+before/after windows, excluding any within ±30 min of an event (at most
+3,000, sampled) — are the comparison group for §11.6. They are data only:
+computed from the same per-day cache and never plotted individually.
+
+An earlier design fitted a second regression baseline to the encounters
+involving the landing aircraft themselves. On the KMCO data it failed its
+out-of-sample validation (an aircraft that has landed is not comparable
+with one still flying after a go-around), so it was replaced by §11.7.
 
 ---
 
@@ -580,16 +589,17 @@ the conclusions differ, the summary says so.
 2. **Post vs baseline**: **SIR_post** = Σ observed / Σ expected in post
    windows, with CI; Wilcoxon one-sample test of post z-scores against 0.
 
-Both are run for both scopes (airspace-wide; go-around-involved against
-matched landing controls).
+These are rates per unit of traffic: they divide by the traffic in the
+same window. Because a go-around may itself add traffic (the aircraft
+stays airborne instead of landing), §11.6 reports the totals and the
+traffic change as well.
 
 ### 11.4 Endpoints
 
-- **Primary**: T1 encounters (observed ∪ predicted) — airspace-wide and
-  go-around-involved.
-- **Secondary**: T2, T3 (observed and predicted separately), expected
-  conflicts (if calibrated), `s_min`. Holm correction across secondary
-  endpoints.
+- **Primary**: T1 encounters (observed ∪ predicted), airspace-wide: the
+  total after ÷ before (§11.6) and the rate per unit of traffic (§11.3).
+- **Secondary**: T2, T3 (observed and predicted separately), `s_min`.
+  Holm correction across secondary endpoints.
 - For every endpoint the **minimum detectable effect** (80 % power, α =
   0.05) given the number of events is reported, so a null result can be
   interpreted.
@@ -599,6 +609,37 @@ matched landing controls).
 O/E of encounter rate in 1-min bins from −30 to +30 min around `t0`,
 averaged across events, with a day-block bootstrap band. The baseline is
 O/E = 1 by construction.
+
+### 11.6 Totals, traffic, and normal landings
+
+Per-traffic rates alone can hide an effect that works through traffic.
+For each event the before and after windows give totals of aircraft time,
+traffic (aircraft-pair time) and T1/T2/T3 encounters. Reported per
+measure (`change_summary.csv`):
+
+- **after ÷ before** = Σ after / Σ before over events, day-block bootstrap
+  CI, Wilcoxon signed-rank test on the paired differences;
+- the same ratio around **normal landings**, weighted to the go-arounds'
+  hours of day (each landing weighted by go-arounds ÷ landings in its local
+  hour; hours without go-arounds get weight 0) — the change that happens
+  anyway when an arrival completes;
+- **go-around vs normal** = the ratio of the two (a difference-in-
+  differences on the log scale), with a joint day-block bootstrap CI.
+
+The total change is the traffic change times the per-traffic change, so
+the three numbers together say whether a change in encounters comes from
+more traffic, from closer pairs, or both.
+
+### 11.7 The go-around aircraft itself
+
+For each event window: encounters involving the go-around aircraft,
+compared with what an average aircraft present in the same window would
+have in the same time inside the area (each encounter involves two
+aircraft; the other aircraft's involvement rate per second × the
+go-around aircraft's seconds inside the area). Pooled observed ÷
+expected for the before and after windows with day-block bootstrap CIs,
+and the share of each window the aircraft spent inside the area
+(`go_around_aircraft.csv`).
 
 ---
 
@@ -769,11 +810,13 @@ proximity_pipeline/
   loading.py                  cleaning, 1 s grid, projection, quality flags
   pairs.py                    pruning, zone-entry intervals, encounters
   geometry.py                 geometry classes, flight phase
-  probability.py              error model, P&E conflict probability
+  probability.py              optional add-on: P&E conflict probability
   windows.py                  window metrics, covariates, flows
   baseline.py                 regression baseline, Phase I/II, validation
   events.py                   event windows, clusters, controls
-  stats.py                    IRR, SIR, equilibrium, power, epoch
+  stats.py                    IRR, SIR, totals, normal landings,
+                              event aircraft, equilibrium, power, epoch
+  labels.py                   plain-language labels for figures/reports
   sensitivity.py
   goaround_adapter.py
   viz.py                      all figures (shared style)
@@ -798,11 +841,14 @@ output/KBNA/
       window_metrics.parquet       every clock window
       encounters.parquet (+ .csv)  every encounter
       go_around_risk.csv           one row per event (§11.1)
-      results_primary.csv          IRR / SIR per endpoint & scope
+      change_summary.csv           totals, traffic, normal landings (§11.6)
+      go_around_aircraft.csv       the event aircraft itself (§11.7)
+      results_primary.csv          IRR / SIR per endpoint
       equilibrium.csv
       sensitivity.csv
       figures/
       events/                      one PNG per go-around / touch-and-go
+      probability/                 only with --probability (§7)
       summary.pdf
 ```
 
@@ -834,25 +880,36 @@ One page, three rows:
 
 ### 16.2 Study-level (`figures/`)
 
-1. **Superposed epoch** (headline figure): O/E vs minutes from `t0`, −30 to
-   +30, with bootstrap band and the O/E = 1 line.
-2. **Forest plot**: IRR (post/pre) and SIR (pre, post) with CIs for every
-   endpoint and both scopes, reference line at 1.
-3. **Equilibrium**: histogram of pre-window z-scores over the N(0, 1)
-   curve, and the in-control share with CI.
-4. **Control chart**: z-score of every clock window over the dataset with
-   control limits; go-around windows marked.
-5. **Where encounters happen**: density maps (same colour scale) of
-   encounter locations — baseline vs post-go-around.
-6. **Sensitivity**: IRR and SIR with CIs across every sweep setting.
-7. **Ceiling check**: distribution of go-around max post-window height with
-   the charted and effective ceilings.
+All labels are plain language (`proximity_pipeline/labels.py`); legends sit
+outside the data; constrained layout prevents overlaps; each figure has a
+caption in `summary.pdf` saying how to read it, and the PDF opens with the
+key results in sentences and a glossary that defines every term once.
+
+1. **What changes after a go-around** (`change_vs_normal.png`): % change
+   before → after in aircraft time, traffic and T1 encounters, around
+   go-arounds and around normal landings at the same hours (§11.6).
+2. **Superposed epoch**: O/E vs minutes from `t0`, −30 to +30, with
+   bootstrap band and the O/E = 1 line.
+3. **Per unit of traffic, by encounter type** (`forest.png`): IRR and SIR
+   (before, after) with CIs per endpoint, reference line at 1.
+4. **Before-window check** (`equilibrium.png`): each event's before-window
+   z on a strip, with the 95 % normal band and the in-range count.
+5. **Daily fit** (`daily_levels.png`): T1 encounters observed ÷ expected
+   per day, with the range of 95 % of days and days with events marked.
+6. **Where encounters happen**: density maps (same colour scale) of
+   encounter locations — normal traffic vs after events.
+7. **Sensitivity**: total ratio, IRR and SIR with CIs across every sweep
+   setting, rows in plain words.
+8. **Ceiling check**: highest point of each event aircraft in the after
+   window with the starting and effective ceilings.
 
 ### 16.3 Baseline report (`baseline/<label>/validation/`)
 
-Out-of-sample exceedance vs nominal, PIT histogram / QQ-plot, stability
-curve, data-sufficiency table; probability-model reliability diagram and
-error-growth curves.
+A plain verdict with the warnings translated into sentences; windows
+used; accuracy on held-out months against the target ranges; figures for
+held-out months, the shape of the errors and the stability curve; what the
+model accounts for (conditions as rate multipliers, hours in order); data
+per group of similar windows; technical notes last.
 
 ---
 
@@ -921,6 +978,12 @@ The method must be shown to work on data where the answer is known:
     within the cutoff are reclassified; on synthetic days with a 600 ft
     coverage floor every true go-around is recovered with no low
     approaches left.
+14. **Totals and normal landings**: the after ÷ before totals, the
+    hour-weighted normal-landing ratio (hours without events get no
+    weight) and their ratio are exact on constructed frames.
+15. **Event aircraft involvement**: observed ÷ expected is 1 when the
+    event aircraft is involved like everyone else, and scales with its
+    own encounters.
 
 ---
 
