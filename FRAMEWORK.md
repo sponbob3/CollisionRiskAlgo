@@ -142,9 +142,16 @@ go-around post-window time spent beyond 10 NM) is reported alongside.
 
 ### 4.1 Input
 
-`datasets/<ICAO>_<label>/` holds one file per day (`.parquet` preferred,
+`datasets/<folder>/` holds one file per day (`.parquet` preferred,
 `.csv` accepted) of OpenSky-style state vectors containing **all traffic**
-around the airport, with the columns used by the go-around pipeline:
+around the airport, with the columns used by the go-around pipeline.
+The folder name does not matter beyond telling the airport: `KMCO`,
+`kmco_2025q1`, `KMCO-2025Q1` all work (`pipeline.dataset_identity`: the
+ICAO code from the start of the name, else from the daily file names,
+else `--airport`; capitalisation ignored). Day caches are kept per
+airport and stored baselines are matched by the files they were built
+from, and go-around runs are offered by the days and dates they cover, so
+renaming the folder loses nothing.
 
 `timestamp, icao24, callsign, latitude, longitude, altitude (barometric),
 geoaltitude, vertical_rate, groundspeed, track, onground`
@@ -521,7 +528,10 @@ output/<ICAO>/proximity_risk/baseline/<label>/
 
 It is reused automatically when the dataset contents and all
 baseline-relevant parameters (hash) match; otherwise it is rebuilt.
-`--rebuild-baseline` forces a rebuild; `--baseline-from <ICAO>_<label>`
+A stored baseline is found by its contents: when baseline/<label>/ does
+not match, any stored baseline of the airport built from exactly the same
+files with the same settings is reused (a renamed dataset folder).
+`--rebuild-baseline` forces a rebuild; `--baseline-from <dataset folder>`
 scores events against another dataset's baseline for the same airport.
 
 ### 9.7 Normal landings (comparison group)
@@ -870,7 +880,7 @@ README.md
 TERMINAL_COMMANDS.pdf
 requirements.txt
 airports/<ICAO>.yaml          <- airport profiles (+ airspace, flows)
-datasets/<ICAO>_<label>/      <- daily parquet/csv (gitignored)
+datasets/<folder>/            <- daily parquet/csv (gitignored)
 output/                       <- runs (gitignored)
 goaround_pipeline/            <- vendored, unchanged (+ VENDORED_FROM.txt)
 proximity_pipeline/
@@ -905,7 +915,8 @@ output/KBNA/
   goaround/run_NN/                 go-around pipeline outputs (§13)
   proximity_risk/
     baseline/<label>/              stored baseline (§9.6)
-    cache/<label>/<day>.parquet    per-day pairwise results (param-hashed)
+    cache/<day>.*.parquet          per-day pairwise results, one folder per
+                                   airport (param- and file-hashed)
     run_NN/
       run_config.txt               every resolved parameter + dataset + versions
       ceiling_check.csv
@@ -1094,7 +1105,8 @@ The method must be shown to work on data where the answer is known:
 ## 19. Performance
 
 - Days are processed independently and in parallel (`--workers`).
-- Per-day pairwise results are cached (`cache/<label>/<day>.parquet`) keyed
+- Per-day pairwise results are cached (`cache/<day>.*.parquet`, one folder
+  per airport; caches in older per-dataset subfolders are moved up) keyed
   by a hash of the relevant parameters; re-runs and sensitivity sweeps
   reuse them.
 - Pairwise computation is vectorised in NumPy per second (pairs × 1 s),

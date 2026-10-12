@@ -60,7 +60,11 @@ COMMANDS = [
          "altitude, geoaltitude, vertical_rate, groundspeed, track, "
          "onground; a position-time column (last_position) is used when "
          "present to drop rows that repeat an old position. The folder name "
-         "is <ICAO>_<label>; the prefix selects airports/<ICAO>.yaml. "
+         "only has to start with the airport code (KMCO, kmco_2025q1, "
+         "KMCO-2025Q1 all work; capitalisation never matters; otherwise "
+         "add --airport KMCO); it selects airports/<ICAO>.yaml. Renaming "
+         "the folder later loses nothing: caches, baselines and "
+         "go-around runs are found by their contents. "
          "datasets/ is gitignored."),
         ("python run_proximity.py check-data KMCO_2025Q1\n"
          "python run_proximity.py check-data KMCO_2025Q1 --limit 5",
@@ -140,7 +144,7 @@ COMMANDS = [
         ("python run_proximity.py KMCO_2025Q1 --goaround-run 3",
          "Reuse output/KMCO/goaround/run_03 instead of re-running "
          "go-around detection (the proximity run still gets a new NN)."),
-        ("ls output/KMCO/proximity_risk/cache/2025Q1/",
+        ("ls output/KMCO/proximity_risk/cache/",
          "Per-day pairwise caches (parameter-hashed). They are reused "
          "automatically by every run and sweep; delete the folder to "
          "force recomputation."),

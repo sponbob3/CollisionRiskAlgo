@@ -28,7 +28,8 @@ python -m pip install -r requirements.txt
 # every new terminal: source .venv/bin/activate  (prompt shows "(.venv)")
 
 # put daily .parquet/.csv files of ALL traffic around the airport in
-# datasets/<ICAO>_<label>/ (directly or in subfolders, e.g. one per month)
+# datasets/<folder>/ (directly or in subfolders, e.g. one per month); any
+# folder name starting with the airport code works (KMCO, kmco_2025q1, ...)
 #   e.g. datasets/KMCO_2025Q1/2025-01/KMCO_20250101.parquet
 python run_proximity.py check-data KMCO_2025Q1    # audit the data first
 python run_proximity.py KMCO_2025Q1               # the whole analysis
@@ -123,7 +124,7 @@ Run Proximity Analysis.command <- macOS: double-click in Finder to start
 FRAMEWORK.md                  <- method and build specification
 TERMINAL_COMMANDS.pdf         <- every command with examples
 airports/<ICAO>.yaml          <- airport profiles (+ airspace, flows)
-datasets/<ICAO>_<label>/      <- your data (gitignored)
+datasets/<folder>/            <- your data (gitignored; name it e.g. KMCO_2025Q1)
 output/                       <- runs, baselines, caches (gitignored)
 goaround_pipeline/            <- vendored unchanged (VENDORED_FROM.txt)
 proximity_pipeline/

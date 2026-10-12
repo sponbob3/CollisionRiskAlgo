@@ -2,8 +2,10 @@
 Orchestration: per-day processing with a parameter-hashed cache, and
 run_all(), which runs every stage in the order of FRAMEWORK.md section 14.
 
-Per-day cache (section 19): output/<ICAO>/proximity_risk/cache/<label>/
-holds, per daily file <day>:
+Per-day cache (section 19): output/<ICAO>/proximity_risk/cache/ holds,
+per daily file <day> (one folder per airport, so renaming the dataset
+folder never loses it; caches left in older per-dataset subfolders are
+moved up automatically when still valid):
     <day>.pairs.parquet     flagged pair-seconds (pairs.PAIR_COLUMNS)
     <day>.presence.parquet  airborne aircraft-seconds in the volume
     <day>.legs.parquet      flight legs (leg index -> icao24, callsign)
@@ -21,6 +23,8 @@ import datetime
 import hashlib
 import json
 import os
+import re
+import shutil
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -105,8 +109,71 @@ def file_signature(path: Path) -> str:
 
 # ------------------------------------------------------- day cache ------
 
-def cache_root(icao: str, label: str) -> Path:
-    return config.OUTPUT_DIR / icao / "proximity_risk" / "cache" / label
+# ------------------------------------------------- dataset identity -----
+
+_ICAO_NAME = re.compile(r"^([A-Za-z][A-Za-z0-9]{3})(?:[\s_\-.]+(.*))?$")
+_ICAO_FILE = re.compile(r"^([A-Za-z][A-Za-z0-9]{3})[_\-]?(?:19|20)\d{6}")
+
+
+def dataset_identity(dataset: Path, icao: str | None = None
+                     ) -> tuple[str, str]:
+    """(ICAO, label) of a dataset folder, whatever it is called: KMCO,
+    kmco_2025q1, KMCO-2025Q1 and "KMCO 2025 Q1" all work, and
+    capitalisation never matters. The ICAO code comes from `icao` when
+    given, else from the start of the folder name, else from the daily
+    file names (KMCO_20250101.parquet). The label (lower case; "all"
+    when the name has none) only names the run in reports and the
+    stored baseline's folder; caches and baselines are found by their
+    contents, not by this name."""
+    dataset = Path(dataset)
+    name = dataset.name
+    m = _ICAO_NAME.match(name)
+    code = icao.upper() if icao else None
+    if code is None and m:
+        code = m[1].upper()
+    if code is None:
+        for f in sorted(dataset.rglob("*")):
+            fm = _ICAO_FILE.match(f.name)
+            if fm and f.suffix in (".parquet", ".csv"):
+                code = fm[1].upper()
+                break
+    if code is None:
+        raise ValueError(
+            f"cannot tell the airport from the folder name '{name}' or its "
+            f"files: start the folder name with the ICAO code (e.g. "
+            f"KMCO_{name}) or pass --airport KMCO")
+    rest = (m[2] or "") if (m and m[1].upper() == code) else name
+    label = re.sub(r"[^a-z0-9]+", "_", (rest or "").lower()).strip("_")
+    return code, label or "all"
+
+
+def cache_root(icao: str, label: str | None = None) -> Path:
+    """One pairwise cache folder per airport (label kept for callers)."""
+    return config.OUTPUT_DIR / icao.upper() / "proximity_risk" / "cache"
+
+
+def adopt_old_caches(files: list[Path], cache_dir: Path) -> int:
+    """Move valid day caches from older per-dataset subfolders
+    (cache/<label>/) up into the airport's cache folder, so that a
+    renamed dataset folder still finds them. Returns how many days were
+    moved; stale copies are left where they are."""
+    if not cache_dir.exists():
+        return 0
+    moved = 0
+    for f in files:
+        if cache_is_current(cache_dir, f):
+            continue
+        for meta in sorted(cache_dir.glob(f"*/{f.stem}.meta.json")):
+            sub = meta.parent
+            if cache_is_current(sub, f):
+                for src in cache_paths(sub, f.stem).values():
+                    shutil.move(str(src), str(cache_dir / src.name))
+                moved += 1
+                break
+    for sub in cache_dir.iterdir():
+        if sub.is_dir() and not any(sub.iterdir()):
+            sub.rmdir()
+    return moved
 
 
 def cache_paths(cache_dir: Path, day: str) -> dict:
@@ -184,6 +251,10 @@ def build_day_caches(files: list[Path], cache_dir: Path, workers: int = 1,
                      force: bool = False, quiet: bool = False) -> list[dict]:
     """Ensure every day's cache is current; compute missing/stale days in
     parallel. Returns the meta records in file order."""
+    moved = adopt_old_caches(files, cache_dir)
+    if moved and not quiet:
+        print(f"pairwise stage: {moved} day caches moved from an older "
+              f"dataset-name folder into {cache_dir.name}/")
     todo = [f for f in files if force or not cache_is_current(cache_dir, f)]
     if not quiet:
         print(f"pairwise stage: {len(files)} days, {len(todo)} to compute "
@@ -495,6 +566,60 @@ def _comparison(g, c, ev, ctl, exp, enc, days, usage, reps, seed,
     return out
 
 
+def find_baseline(root: Path, label: str, param_hash: str | None,
+                  ds_sig: str | None) -> Path:
+    """Folder of the stored baseline for this data: baseline/<label>/
+    when it matches; otherwise any stored baseline of this airport built
+    from exactly the same files with the same settings (a renamed
+    dataset folder); otherwise baseline/<label>/ (built there). With no
+    hash and signature, the folder whose name matches the label
+    regardless of capitalisation."""
+    from .baseline import baseline_is_reusable
+    own = root / label
+    if param_hash is None:
+        if own.exists() or not root.exists():
+            return own
+        for d in root.iterdir():
+            if d.is_dir() and d.name.lower() == label.lower():
+                return d
+        return own
+    if baseline_is_reusable(own, param_hash, ds_sig):
+        return own
+    if root.exists():
+        for d in sorted(root.iterdir()):
+            if d.is_dir() and baseline_is_reusable(d, param_hash, ds_sig):
+                return d
+    return own
+
+
+def goaround_run_info(ga_dir: Path) -> dict:
+    """Dataset name and number of days a go-around run was made from
+    (from its run_config.txt), and its go-around / touch-and-go counts
+    and first / last approach date."""
+    info = {"dir": ga_dir, "nn": int(ga_dir.name.split("_")[1]),
+            "dataset": "?", "days": None, "go_arounds": 0,
+            "touch_and_goes": 0, "first": None, "last": None}
+    cfg = ga_dir / "run_config.txt"
+    if cfg.exists():
+        m = re.search(r"^dataset:\s*(.+?)\s*\((\d+) daily",
+                      cfg.read_text(errors="ignore"), re.M)
+        if m:
+            info["dataset"], info["days"] = m[1], int(m[2])
+    try:
+        a = pd.read_csv(ga_dir / "all_approaches.csv",
+                        usecols=["outcome", "t_low_utc"])
+        vc = a["outcome"].value_counts()
+        info["go_arounds"] = int(vc.get("go_around", 0))
+        info["touch_and_goes"] = int(vc.get("touch_and_go", 0))
+        t = pd.to_datetime(a["t_low_utc"], utc=True, errors="coerce").dropna()
+        if len(t):
+            info["first"] = f"{t.min():%Y-%m-%d}"
+            info["last"] = f"{t.max():%Y-%m-%d}"
+    except Exception:
+        pass
+    return info
+
+
 def baseline_param_hash_for(spec, window_min: float, exclusion_min: float) -> str:
     from .baseline import baseline_param_hash
     return baseline_param_hash({"radius": spec.radius_nm,
@@ -511,8 +636,7 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
     from . import baseline as B
     t_run = time.time()
     dataset = Path(dataset)
-    icao, label = dataset.name.split("_", 1)
-    icao = icao.upper()
+    icao, label = dataset_identity(dataset, getattr(args, "airport", None))
     from . import profile_setup
     profile_setup.ensure_profile(icao, dataset)
     airspace.load_airspace(icao)
@@ -538,6 +662,11 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
         if not (ga_dir / "all_approaches.csv").exists():
             raise FileNotFoundError(f"{ga_dir} has no all_approaches.csv")
         print(f"go-around stage: reusing {rel(ga_dir)}")
+        info = goaround_run_info(ga_dir)
+        if info["days"] is not None and info["days"] != len(files):
+            print(f"  note: {ga_dir.name} was made from {info['days']} days "
+                  f"of data ({info['dataset']}); this dataset has "
+                  f"{len(files)} days")
     else:
         ga_dir = ga_base / f"run_{nn:02d}"
         ga.run_goaround(dataset, ga_dir, plots=not args.no_plots,
@@ -589,11 +718,16 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
         error_model = P.ErrorModel(em_table)
 
     # 5-8. encounters, windows, baseline, events, statistics
-    baseline_dir = px_base / "baseline" / label
+    baseline_dir = find_baseline(px_base / "baseline", label,
+                                 baseline_param_hash_for(
+                                     spec, window_min,
+                                     config.BASELINE_EXCLUSION_MIN), ds_sig)
     baseline_from = None
     if args.baseline_from:
-        other_label = args.baseline_from.split("_", 1)[1]
-        baseline_from = px_base / "baseline" / other_label
+        _, other_label = dataset_identity(Path(args.baseline_from),
+                                          icao=icao)
+        baseline_from = find_baseline(px_base / "baseline", other_label,
+                                      None, None)
         if not (baseline_from / "baseline.json").exists():
             raise FileNotFoundError(f"no stored baseline at {baseline_from}")
         print(f"baseline: scoring against {rel(baseline_from)}")

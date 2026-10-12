@@ -1,6 +1,9 @@
 # Datasets
 
-Each dataset is one subfolder here, named `<ICAO>_<label>`, holding one
+Each dataset is one subfolder here whose name starts with the airport's
+ICAO code (`KMCO`, `kmco_2025q1`, `KMCO-2025Q1`: capitalisation and the
+rest of the name do not matter, and renaming it later loses nothing),
+holding one
 file per day of OpenSky-style ADS-B data (`.parquet` preferred, `.csv`
 accepted; when both exist for the same day, the parquet wins), directly
 or in subfolders such as one per month:

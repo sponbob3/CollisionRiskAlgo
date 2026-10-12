@@ -81,31 +81,27 @@ def _dates(files: list[Path]) -> tuple[str, str]:
     return (min(ds), max(ds)) if ds else ("?", "?")
 
 
-def _goaround_runs(ga_base: Path, dataset_name: str) -> list[dict]:
-    """Go-around runs of this airport with their dataset and counts."""
+def _run_matches(info: dict, n_files: int, first: str, last: str) -> bool:
+    """A go-around run belongs to this data when it was made from the same
+    number of days and its approaches fall inside the data's dates (the
+    dataset folder's name is not used: it may have been renamed)."""
+    if info["days"] is not None and info["days"] != n_files:
+        return False
+    if info["first"] and first != "?":
+        lo = (pd_ts(first) - _day()).strftime("%Y-%m-%d")
+        hi = (pd_ts(last) + _day() * 2).strftime("%Y-%m-%d")
+        return lo <= info["first"] and info["last"] <= hi
+    return info["days"] == n_files
+
+
+def pd_ts(s: str):
     import pandas as pd
-    runs = []
-    for d in sorted(ga_base.glob("run_*")):
-        if not (d / "all_approaches.csv").exists():
-            continue
-        name, n_files = "?", "?"
-        cfg = d / "run_config.txt"
-        if cfg.exists():
-            m = re.search(r"^dataset:\s*(\S+)\s*\((\d+) daily",
-                          cfg.read_text(errors="ignore"), re.M)
-            if m:
-                name, n_files = m[1], m[2]
-        try:
-            out = pd.read_csv(d / "all_approaches.csv",
-                              usecols=["outcome"])["outcome"].value_counts()
-        except Exception:
-            out = pd.Series(dtype=int)
-        runs.append({"dir": d, "nn": int(d.name.split("_")[1]),
-                     "dataset": name, "days": n_files,
-                     "go_arounds": int(out.get("go_around", 0)),
-                     "touch_and_goes": int(out.get("touch_and_go", 0)),
-                     "same_dataset": name == dataset_name})
-    return runs
+    return pd.Timestamp(s)
+
+
+def _day():
+    import pandas as pd
+    return pd.Timedelta(days=1)
 
 
 def run() -> None:
@@ -136,18 +132,22 @@ def _run() -> None:
         return
     print("\nWhich airport / dataset?")
     labels = []
+    from proximity_pipeline.pipeline import dataset_identity
     for d in ds:
         n = sum(1 for p in d.rglob("*") if p.suffix in (".parquet", ".csv")
                 and not p.name.startswith("."))
-        labels.append(f"{d.name}  ({d.name.split('_')[0].upper()}, {n} files)")
+        try:
+            code = dataset_identity(d)[0]
+        except ValueError:
+            code = "airport?"
+        labels.append(f"{d.name}  ({code}, {n} files)")
     dataset = ds[_choose("number", labels)]
-    if "_" not in dataset.name:
-        print(f"\nthe folder name must be <ICAO>_<label> (e.g. "
-              f"{dataset.name}_2025q1); rename datasets/{dataset.name} and "
-              "start again.")
-        return
-    icao, label = dataset.name.split("_", 1)
-    icao = icao.upper()
+    from proximity_pipeline import pipeline
+    try:
+        icao, label = pipeline.dataset_identity(dataset)
+    except ValueError:
+        code = _ask("which airport is this (ICAO code, e.g. KMCO)")
+        icao, label = pipeline.dataset_identity(dataset, code)
 
     from proximity_pipeline import config
     from proximity_pipeline import goaround_adapter as ga
@@ -173,9 +173,10 @@ def _run() -> None:
           f"{len(ga.config.RUNWAYS)} runway ends, elevation "
           f"{ga.config.FIELD_ELEVATION_FT:,.0f} ft")
 
-    # 3. pairwise cache
-    from proximity_pipeline import pipeline
-    cache_dir = pipeline.cache_root(icao, label)
+    # 3. pairwise cache (one folder per airport; caches made under an
+    # older dataset-folder name are moved up first)
+    cache_dir = pipeline.cache_root(icao)
+    pipeline.adopt_old_caches(files, cache_dir)
     n_cached = (sum(pipeline.cache_is_current(cache_dir, f) for f in files)
                 if cache_dir.exists() else 0)
     rebuild_cache = False
@@ -194,38 +195,46 @@ def _run() -> None:
         print(f"\npairwise cache: none yet - all {len(files)} days will be "
               "computed (the slowest step; later runs reuse it)")
 
-    # 4. go-around detection
+    # 4. go-around detection: every earlier run of this airport, matched
+    # to this data by its days and dates (not by folder name)
     ga_base = config.OUTPUT_DIR / icao / "goaround"
-    runs = _goaround_runs(ga_base, dataset.name)
-    same = [r for r in runs if r["same_dataset"]]
+    runs = [pipeline.goaround_run_info(d)
+            for d in sorted(ga_base.glob("run_*"), reverse=True)
+            if (d / "all_approaches.csv").exists()]
+    for r in runs:
+        r["match"] = _run_matches(r, len(files), first, last)
     goaround_run = None
     print("\ngo-around detection:")
-    if same:
-        options = [f"reuse run_{r['nn']:02d}: {r['go_arounds']} go-arounds, "
-                   f"{r['touch_and_goes']} touch-and-goes, {r['days']} days"
-                   for r in same[::-1]]
+    if runs:
+        runs.sort(key=lambda r: (not r["match"], -r["nn"]))
+        options = []
+        for r in runs:
+            what = (f"{r['go_arounds']} go-arounds, {r['touch_and_goes']} "
+                    f"touch-and-goes, {r['days'] or '?'} days"
+                    + (f", {r['first']} to {r['last']}" if r["first"] else ""))
+            tag = ("matches this data" if r["match"] else
+                   f"made from different data ({r['dataset']})")
+            options.append(f"reuse run_{r['nn']:02d}: {what}  [{tag}]")
         options.append("run the detection again (new run folder)")
-        k = _choose("number", options)
-        if k < len(same):
-            goaround_run = same[::-1][k]["nn"]
+        default = 1 if runs[0]["match"] else len(options)
+        k = _choose("number", options, default)
+        if k < len(runs):
+            goaround_run = runs[k]["nn"]
+            if not runs[k]["match"]:
+                print("  note: this run was made from different data; its "
+                      "go-arounds are used as they are")
     else:
-        if runs:
-            print(f"  {len(runs)} earlier run(s) found, none for "
-                  f"{dataset.name}")
-        print("  the detection runs first (a few minutes per month of data)")
+        print("  no earlier runs: the detection runs first (a few minutes "
+              "per month of data)")
 
-    # 5. baseline
-    bdir = config.OUTPUT_DIR / icao / "proximity_risk" / "baseline" / label
+    # 5. baseline: found by the files it was built from, not by name
+    broot = config.OUTPUT_DIR / icao / "proximity_risk" / "baseline"
+    stored = sorted(broot.glob("*/baseline.json")) if broot.exists() else []
     rebuild_baseline = False
-    if (bdir / "baseline.json").exists():
-        import json
-        try:
-            info = json.loads((bdir / "baseline.json").read_text())
-            verdict = info.get("verdict", "?")
-        except Exception:
-            verdict = "?"
-        print(f"\nstored baseline found ({verdict}); it is reused when the "
-              "data and settings match, and rebuilt automatically when not")
+    if stored:
+        print(f"\nstored baseline: {len(stored)} found for {icao}; the run "
+              "reuses the one built from exactly these files with the same "
+              "settings, and builds a new one otherwise")
         rebuild_baseline = _yes("force a rebuild anyway", False)
     else:
         print("\nbaseline: built in this run and stored for later runs")
@@ -250,7 +259,10 @@ def _run() -> None:
                                  False)
 
     # 7. summary and start
-    cmd = [f"python run_proximity.py {dataset.name}"]
+    q = f'"{dataset.name}"' if " " in dataset.name else dataset.name
+    cmd = [f"python run_proximity.py {q}"]
+    if dataset.name.upper().split("_")[0][:4] != icao:
+        cmd.append(f"--airport {icao}")
     if goaround_run:
         cmd.append(f"--goaround-run {goaround_run}")
     if rebuild_baseline:
@@ -275,7 +287,7 @@ def _run() -> None:
         shutil.rmtree(cache_dir)
         print(f"deleted {cache_dir.relative_to(config.ROOT)}")
     args = argparse.Namespace(
-        dataset=dataset.name, goaround_run=goaround_run,
+        dataset=dataset.name, airport=icao, goaround_run=goaround_run,
         rebuild_baseline=rebuild_baseline, baseline_only=False,
         baseline_from=None, window=window,
         include_ambiguous=include_ambiguous,

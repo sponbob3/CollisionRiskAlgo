@@ -124,10 +124,10 @@ def main(argv: list[str]) -> None:
         sys.exit("usage: python -m proximity_pipeline.validate_cpa "
                  "<ICAO_label> <day> [<day> ...]")
     name, days = argv[0], argv[1:]
-    icao, label = name.split("_", 1)
-    airspace.load_airspace(icao.upper())
     dataset = config.DATASETS_DIR / name
-    cache_dir = pipeline.cache_root(icao.upper(), label)
+    icao, label = pipeline.dataset_identity(dataset)
+    airspace.load_airspace(icao)
+    cache_dir = pipeline.cache_root(icao)
     tot = {"ours": 0, "traffic": 0, "both": 0, "agree": 0}
     for day in days:
         matches = [f for f in ga.data_files(dataset) if day in f.stem]

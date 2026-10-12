@@ -15,9 +15,12 @@ Usage:
     python run_proximity.py new-airport KMCO KMCO_2025Q1  # ... using the data
     python run_proximity.py check-data KBNA_2025      # data audit only
 
-Datasets live in datasets/<ICAO>_<label>/ (daily .parquet or .csv files,
-directly or in subfolders such as one per month);
-the ICAO prefix of the folder name selects airports/<ICAO>.yaml. Every run
+Datasets live in datasets/<folder>/ (daily .parquet or .csv files,
+directly or in subfolders such as one per month). The folder name can be
+KMCO, kmco_2025q1, KMCO-2025Q1, ...: the airport code comes from its
+start (or from the daily file names, or --airport), and capitalisation
+never matters. Caches, stored baselines and go-around runs are found by
+their contents, so renaming the folder loses nothing. Every run
 writes fresh numbered folders output/<ICAO>/goaround/run_NN/ and
 output/<ICAO>/proximity_risk/run_NN/ (same NN). Method: FRAMEWORK.md.
 """
@@ -51,6 +54,11 @@ def resolve_dataset(name: str | None) -> Path:
     if name:
         path = DATASETS_DIR / name
         if not path.is_dir():
+            # capitalisation does not matter: kmco_2025q1 = KMCO_2025Q1
+            same = [d for d in ds if d.name.lower() == name.lower()]
+            if len(same) == 1:
+                return same[0]
+        if not path.is_dir():
             options = ", ".join(d.name for d in ds) or "(none)"
             sys.exit(f"error: no dataset folder '{name}' in datasets/. "
                      f"Available: {options}")
@@ -77,8 +85,10 @@ def cmd_check_data(name: str | None, limit: int | None) -> None:
 
     from proximity_pipeline import profile_setup
 
+    from proximity_pipeline.pipeline import dataset_identity
+
     dataset = resolve_dataset(name)
-    icao = dataset.name.split("_")[0].upper()
+    icao, _ = dataset_identity(dataset)
     profile_setup.ensure_profile(icao, dataset)
     airspace.load_airspace(icao)
     print(f"check-data: {dataset.name}  airport {icao}")
@@ -114,7 +124,11 @@ def main() -> None:
                     "(go-around detection, baseline, encounters, "
                     "statistics, figures, summary.pdf).")
     ap.add_argument("dataset", nargs="?",
-                    help="folder name under datasets/ (e.g. KBNA_2025)")
+                    help="folder name under datasets/ (e.g. KBNA_2025; "
+                         "capitalisation does not matter)")
+    ap.add_argument("--airport", metavar="ICAO",
+                    help="airport code, when the dataset folder name does "
+                         "not start with it")
     ap.add_argument("--goaround-run", type=int, metavar="N",
                     help="reuse output/<ICAO>/goaround/run_N instead of "
                          "re-running go-around detection")
