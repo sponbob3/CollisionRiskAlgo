@@ -32,15 +32,14 @@ def _choose(question: str, options: list[str], default: int = 1) -> int:
         print(f"  {i}. {o}")
     while True:
         try:
-            ans = input(f"Type a number and press Enter (just Enter = "
-                        f"{default}): ").strip()
+            ans = input(f"> [{default}] ").strip()
         except EOFError:
             ans = ""
         if not ans:
             return default - 1
         if ans.isdigit() and 1 <= int(ans) <= len(options):
             return int(ans) - 1
-        print(f"  Please type a number from 1 to {len(options)}.")
+        print(f"  type a number from 1 to {len(options)}")
 
 
 def _size(path: Path) -> str:
@@ -107,18 +106,16 @@ def _run() -> None:
     import run_proximity as rp
     print(LINE)
     print(" PROXIMITY RISK AFTER GO-AROUNDS")
-    print(" Answer each question by typing a number and pressing Enter.")
-    print(" Pressing Enter alone always picks the recommended answer.")
+    print(" Answer with the option number; Enter alone = option 1.")
     print(LINE)
 
     # ---- 1. dataset / airport
-    _step(1, TOTAL_STEPS, "Data")
+    _step(1, TOTAL_STEPS, "Dataset")
     ds = rp.list_datasets()
     if not ds:
-        print(f"No data found in {rp.DATASETS_DIR}.\nMake a folder in "
-              "datasets/ whose name starts with the airport code (e.g. "
-              "datasets/KMCO_2025Q1/) and put the daily .parquet or .csv "
-              "files in it (subfolders are fine).")
+        print(f"no datasets in {rp.DATASETS_DIR}: create datasets/<ICAO>_"
+              "<label>/ (e.g. datasets/KMCO_2025Q1/) with the daily .parquet "
+              "or .csv files (subfolders are fine)")
         return
     from proximity_pipeline import pipeline
     labels = []
@@ -128,18 +125,14 @@ def _run() -> None:
         try:
             code = pipeline.dataset_identity(d)[0]
         except ValueError:
-            code = "airport unknown"
+            code = "ICAO unknown"
         labels.append(f"{d.name}  ({code}, {n} daily files)")
-    if len(ds) == 1:
-        dataset = ds[0]
-        print(f"Found one dataset: {labels[0]}")
-    else:
-        dataset = ds[_choose("Which data do you want to analyse?", labels)]
+    dataset = ds[_choose("Which dataset?", labels)]
     try:
         icao, label = pipeline.dataset_identity(dataset)
     except ValueError:
-        code = input("Which airport is this? Type its ICAO code (e.g. KMCO) "
-                     "and press Enter: ").strip()
+        code = input("Airport ICAO code for this dataset (e.g. KMCO): "
+                     ).strip()
         icao, label = pipeline.dataset_identity(dataset, code)
 
     from proximity_pipeline import config
@@ -147,56 +140,47 @@ def _run() -> None:
     files = ga.data_files(dataset)
     first, last = _dates(files)
     subs = sorted({f.parent.name for f in files if f.parent != dataset})
-    print(f"Using {dataset.name}: {len(files)} days of data, {first} to "
-          f"{last}" + (f", in {len(subs)} subfolders" if subs else "")
-          + f", {_size(dataset)}.")
+    print(f"{dataset.name}: {len(files)} daily files, {first} to {last}"
+          + (f", {len(subs)} subfolders" if subs else "")
+          + f", {_size(dataset)}")
 
     # ---- 2. airport profile (nothing to decide)
-    _step(2, TOTAL_STEPS, "Airport")
+    _step(2, TOTAL_STEPS, "Airport profile")
     from proximity_pipeline import airspace, profile_setup
     prof_path = profile_setup.profile_path(icao)
     if prof_path.exists():
-        print(f"Airport settings found: {prof_path.relative_to(config.ROOT)}")
+        print(f"profile found: {prof_path.relative_to(config.ROOT)}")
     else:
-        print("No airport settings yet: creating them now from the "
-              "OurAirports database (ourairports.com) and the data.")
+        print("no profile yet: creating it from OurAirports "
+              "(ourairports.com) and the data")
     profile_setup.ensure_profile(icao, dataset)
     prof = airspace.load_airspace(icao)
     print(f"{prof.get('name', icao)} ({icao}): {len(ga.config.RUNWAYS)} runway "
-          f"ends, elevation {ga.config.FIELD_ELEVATION_FT:,.0f} ft, time zone "
-          f"{ga.config.LOCAL_TZ}. Nothing to decide here.")
+          f"ends, elevation {ga.config.FIELD_ELEVATION_FT:,.0f} ft, "
+          f"{ga.config.LOCAL_TZ}")
 
     # ---- 3. saved per-day computations (pairwise cache)
-    _step(3, TOTAL_STEPS, "Saved computations (the slow part)")
+    _step(3, TOTAL_STEPS, "Pairwise cache")
     cache_dir = pipeline.cache_root(icao)
     pipeline.adopt_old_caches(files, cache_dir)
     n_cached = (sum(pipeline.cache_is_current(cache_dir, f) for f in files)
                 if cache_dir.exists() else 0)
     rebuild_cache = False
-    print("Every day of data is first turned into aircraft pairs and "
-          "encounters. This is the slowest step, so the result is saved and "
-          "reused by later runs.")
     if n_cached:
         rest = len(files) - n_cached
-        print(f"Found: {n_cached} of {len(files)} days already computed and "
-              f"saved ({_size(cache_dir)})."
-              + (f" The other {rest} will be computed in this run." if rest
-                 else ""))
-        k = _choose("Do you want to use the saved computations?", [
-            "Yes, use them (recommended: fast)",
-            f"No, delete them and compute all {len(files)} days again from "
-            "the raw data (takes hours)"])
+        print(f"existing cache: {n_cached} of {len(files)} days "
+              f"({_size(cache_dir)}, {cache_dir.relative_to(config.ROOT)})"
+              + (f"; {rest} days still to compute" if rest else ""))
+        k = _choose("Use the existing cache?", [
+            "use existing cache (only missing days are computed)",
+            f"delete the cache and recompute all {len(files)} days (hours)"])
         if k == 1:
-            sure = _choose("Are you sure? This deletes the saved computations "
-                           "for this airport.", [
-                               "No, keep them and use them",
-                               "Yes, delete them and compute everything "
-                               "again"])
-            rebuild_cache = sure == 1
+            rebuild_cache = _choose("Delete the cache for this airport?", [
+                "no, keep and use it",
+                "yes, delete and recompute"]) == 1
     else:
-        print(f"Found: nothing saved yet. All {len(files)} days will be "
-              "computed in this run (this can take a few hours the first "
-              "time). Nothing to decide here.")
+        print(f"no cache yet: all {len(files)} days are computed in this run "
+              "(slowest step; later runs reuse it)")
 
     # ---- 4. go-around detection
     _step(4, TOTAL_STEPS, "Go-around detection")
@@ -210,39 +194,31 @@ def _run() -> None:
     if runs:
         runs.sort(key=lambda r: (not r["match"], -r["nn"]))
         n_match = sum(r["match"] for r in runs)
-        print(f"Found: {len(runs)} earlier go-around detection result(s) "
-              f"for {icao}"
-              + (f", {n_match} made from this same data." if n_match
-                 else ", none made from this data."))
+        print(f"existing go-around runs for {icao}: {len(runs)} "
+              f"({n_match} from this dataset's days and dates)")
         options = []
         for r in runs:
             what = (f"{r['go_arounds']} go-arounds, {r['touch_and_goes']} "
                     f"touch-and-goes, {r['days'] or '?'} days"
                     + (f", {r['first']} to {r['last']}" if r["first"] else ""))
-            if r["match"]:
-                options.append(f"Use the results in goaround/run_{r['nn']:02d}"
-                               f" ({what}; same data)"
-                               + (" (recommended)" if r is runs[0] else ""))
-            else:
-                options.append(f"Use the results in goaround/run_{r['nn']:02d}"
-                               f" ({what}; made from DIFFERENT data)")
-        redo = ("Detect the go-arounds again (a few minutes per month of "
-                "data)" + ("" if runs[0]["match"] else " (recommended)"))
+            options.append(f"reuse goaround/run_{r['nn']:02d} ({what})"
+                           + ("" if r["match"] else
+                              "  [made from DIFFERENT data]"))
+        redo = "run go-around detection again (new run folder)"
         if runs[0]["match"]:
             options.append(redo)
         else:
             options.insert(0, redo)
-        k = _choose("Which go-around results should this run use?", options)
+        k = _choose("Which go-around run?", options)
         chosen = (k if runs[0]["match"] else k - 1)
         if 0 <= chosen < len(runs):
             goaround_run = runs[chosen]["nn"]
     else:
-        print("Found: no earlier results. The go-arounds will be detected "
-              "first (a few minutes per month of data). Nothing to decide "
-              "here.")
+        print("no existing go-around runs: detection runs first (a few "
+              "minutes per month of data)")
 
     # ---- 5. baseline
-    _step(5, TOTAL_STEPS, "Baseline (what normal traffic looks like)")
+    _step(5, TOTAL_STEPS, "Baseline")
     import json
     broot = config.OUTPUT_DIR / icao / "proximity_risk" / "baseline"
     sig = pipeline.dataset_signature(files)
@@ -258,49 +234,39 @@ def _run() -> None:
     rebuild_baseline = False
     if same:
         folder, verdict = same[0]
-        print(f"Found: a saved baseline built from these same {len(files)} "
-              f"days (baseline/{folder.name}, rated {verdict or 'unknown'}).")
-        k = _choose("Do you want to use the saved baseline?", [
-            "Yes, use it (recommended: it is rebuilt automatically anyway "
-            "if any setting changed)",
-            "No, build a new baseline (adds a few minutes)"])
+        print(f"existing baseline: baseline/{folder.name}, built from these "
+              f"{len(files)} days ({verdict or 'verdict unknown'})")
+        k = _choose("Use the existing baseline?", [
+            "use existing baseline (rebuilt automatically if settings "
+            "changed)",
+            "rebuild the baseline (a few minutes)"])
         rebuild_baseline = k == 1
     else:
-        print("Found: no saved baseline for these days. A new one will be "
-              "built and saved in this run (a few minutes). Nothing to "
-              "decide here.")
+        print("no existing baseline for these days: built and stored in this "
+              "run (a few minutes)")
 
     # ---- 6. outputs
-    _step(6, TOTAL_STEPS, "What to produce")
-    plots = _choose("Do you want the figures and PDF reports?", [
-        "Yes: figures, summary.pdf and the baseline report (recommended)",
-        "No: only the result tables (CSV files)"]) == 0
+    _step(6, TOTAL_STEPS, "Outputs")
+    plots = _choose("Figures, summary.pdf and baseline report?", [
+        "yes", "no (CSV tables only)"]) == 0
     event_plots = False
     if plots:
-        event_plots = _choose("Do you want a picture of every single "
-                              "go-around?", [
-                                  "Yes: one picture per go-around (adds "
-                                  "about half an hour for 3 months of data)",
-                                  "No: skip these pictures"]) == 0
-    sensitivity = _choose("Do you want the sensitivity analysis? (the whole "
-                          "analysis is rerun with each setting changed, to "
-                          "show the result does not depend on the settings)",
-                          ["No: skip it (faster)",
-                           "Yes: include it (adds a few hours)"]) == 1
-    probability = _choose("Do you want the optional conflict-probability "
-                          "model? (an add-on, not part of the main results)",
-                          ["No (recommended)", "Yes"]) == 1
+        event_plots = _choose("Per-event plots (one PNG per go-around; "
+                              "~30 min for 3 months)?",
+                              ["yes", "no"]) == 0
+    sensitivity = _choose("Sensitivity analysis (full rerun per setting; "
+                          "a few hours)?", ["no", "yes"]) == 1
+    probability = _choose("Conflict-probability add-on (--probability)?",
+                          ["no", "yes"]) == 1
 
     # ---- 7. settings
     _step(7, TOTAL_STEPS, "Settings")
     window = None
     workers = max(1, (os.cpu_count() or 2) - 1)
     include_ambiguous = False
-    k = _choose("Do you want to keep the standard settings? "
-                f"({config.WINDOW_MIN:g}-minute before/after windows, "
-                f"{workers} parallel workers, ambiguous go-arounds not "
-                "counted)", ["Yes, keep them (recommended)",
-                             "No, let me change them"])
+    k = _choose(f"Settings: {config.WINDOW_MIN:g}-min windows, {workers} "
+                "workers, ambiguous go-arounds excluded.",
+                ["keep defaults", "change"])
     if k == 1:
         w = input(f"Window length in minutes (just Enter = "
                   f"{config.WINDOW_MIN:g}): ").strip()
@@ -310,8 +276,7 @@ def _run() -> None:
         if n.isdigit() and int(n) > 0:
             workers = int(n)
         include_ambiguous = _choose(
-            "Count ambiguous go-arounds as events too?",
-            ["No (recommended)", "Yes"]) == 1
+            "Include ambiguous go-arounds as events?", ["no", "yes"]) == 1
 
     # ---- 8. summary and start
     _step(8, TOTAL_STEPS, "Check and start")
@@ -337,24 +302,23 @@ def _run() -> None:
         cmd.append("--include-ambiguous")
     yes_no = {True: "yes", False: "no"}
     print(f"Data:                 {dataset.name} ({len(files)} days, {icao})")
-    print("Saved computations:   "
-          + ("delete and compute again" if rebuild_cache else
-             f"use ({n_cached} of {len(files)} days saved)"))
-    print("Go-around results:    "
-          + (f"use goaround/run_{goaround_run:02d}" if goaround_run
-             else "detect again"))
+    print("Pairwise cache:       "
+          + ("delete and recompute" if rebuild_cache else
+             f"use existing ({n_cached} of {len(files)} days)"))
+    print("Go-around run:        "
+          + (f"reuse goaround/run_{goaround_run:02d}" if goaround_run
+             else "new detection"))
     print("Baseline:             "
-          + ("build a new one" if rebuild_baseline or not same
-             else "use the saved one"))
+          + ("rebuild" if rebuild_baseline else
+             "use existing" if same else "build new"))
     print(f"Figures and PDFs:     {yes_no[plots]}")
-    print(f"Go-around pictures:   {yes_no[event_plots]}")
+    print(f"Per-event plots:      {yes_no[event_plots]}")
     print(f"Sensitivity analysis: {yes_no[sensitivity]}")
     print(f"Probability add-on:   {yes_no[probability]}")
     print(f"Window:               {window or config.WINDOW_MIN:g} minutes")
-    print(f"\n(The same run can be started by typing: {' '.join(cmd)})")
-    if _choose("Start the analysis now?", ["Start now",
-                                           "Cancel (nothing is changed)"]) == 1:
-        print("Cancelled. Nothing was changed.")
+    print(f"Command:              {' '.join(cmd)}")
+    if _choose("Start?", ["start", "cancel"]) == 1:
+        print("cancelled; nothing changed")
         return
     if rebuild_cache and cache_dir.exists():
         shutil.rmtree(cache_dir)
@@ -370,8 +334,7 @@ def _run() -> None:
         workers=workers)
     run_dir = pipeline.run_all(dataset, args, argv=["run_proximity.py"]
                                + " ".join(cmd[1:]).split())
-    print(f"\n{LINE}\nDONE. Results: {run_dir.relative_to(config.ROOT)}/  "
-          f"(start with summary.pdf)\n{LINE}")
+    print(f"\n{LINE}\ndone: {run_dir.relative_to(config.ROOT)}/\n{LINE}")
     if sys.platform == "darwin" and plots and _choose(
-            "Open the results folder in Finder?", ["Yes", "No"]) == 0:
+            "Open the run folder in Finder?", ["yes", "no"]) == 0:
         subprocess.run(["open", str(run_dir)], check=False)
