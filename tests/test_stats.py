@@ -107,7 +107,14 @@ def test_end_to_end_run_detects_injected_increase(effect_dataset, kbna,
                  "window_metrics.parquet", "encounters.parquet",
                  "encounters.csv", "go_around_risk.csv",
                  "results_primary.csv", "equilibrium.csv", "epoch.csv",
-                 "change_summary.csv", "go_around_aircraft.csv"):
+                 "change_summary.csv", "go_around_aircraft.csv",
+                 "landing_windows.csv",
+                 "landing_comparison/before_window_checks.csv",
+                 "landing_comparison/pretrend.csv",
+                 "landing_comparison/placebo.csv",
+                 "landing_comparison/regression_check.csv",
+                 "landing_comparison/robustness.csv",
+                 "landing_comparison/minute_by_minute.csv"):
         assert (run_dir / name).exists(), name
     base = config.OUTPUT_DIR / "KBNA" / "proximity_risk" / "baseline" / "effecttest"
     assert (base / "baseline.json").exists()
@@ -148,6 +155,10 @@ def test_end_to_end_run_detects_injected_increase(effect_dataset, kbna,
                  "figures/forest.png", "figures/equilibrium.png",
                  "figures/daily_levels.png", "figures/encounter_density.png",
                  "figures/change_vs_normal.png",
+                 "figures/before_after_vs_landings.png",
+                 "figures/minute_by_minute.png", "figures/placebo.png",
+                 "figures/before_window_checks.png",
+                 "figures/robustness.png",
                  "figures/ceiling_check.png"):
         assert (run2 / name).exists(), name
     assert len(list((run2 / "events").glob("*.png"))) == len(risk)
@@ -158,13 +169,16 @@ def test_end_to_end_run_detects_injected_increase(effect_dataset, kbna,
 def _pairs(pre, post, hours, days, col="T1_any"):
     return pd.DataFrame({"event_id": [f"e{i}" for i in range(len(pre))],
                          f"pre_{col}": pre, f"post_{col}": post,
-                         "hour": hours, "day": days, "excluded": False})
+                         "hour": hours, "day": days, "flow": "north",
+                         "excluded": False, "pre_bad": False,
+                         "post_bad": False, "early_bad": False})
 
 
 def test_change_summary_totals_and_normal_landings(monkeypatch):
     """Totals ratio = sum after / sum before; normal landings are
     weighted to the go-arounds' hours; vs-normal = the ratio of the two."""
-    monkeypatch.setattr(stats, "CHANGE_MEASURES",
+    from proximity_pipeline import compare
+    monkeypatch.setattr(compare, "CHANGE_MEASURES",
                         [("T1_any", "T1_any", "T1 encounters")])
     ga = _pairs([10, 10, 10, 10], [15, 15, 15, 15], [8, 8, 17, 17],
                 ["d1", "d2", "d3", "d4"])

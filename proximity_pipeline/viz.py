@@ -22,7 +22,7 @@ from scipy import stats as sps
 from . import config
 from . import goaround_adapter as ga
 from . import labels as L
-from .baseline import PRIMARY_METRIC, count_pmf
+from .baseline import PRIMARY_METRIC
 
 # fixed colours (validated categorical slots): before, after, baseline,
 # tiers
@@ -244,6 +244,238 @@ def fig_change(change: pd.DataFrame, out: Path) -> None:
     _save(fig, out)
 
 
+def _slope(ax, before, after, color, label, lw=2.2, ls="-", ms=7,
+           text=True, alpha=1.0, zorder=3, dy=(0, 0)):
+    """One before -> after line; value labels outside the ends, shifted
+    vertically by dy (points) to keep two lines' labels apart."""
+    ax.plot([0, 1], [before, after], ls, color=color, lw=lw, marker="o",
+            ms=ms, label=label, alpha=alpha, zorder=zorder)
+    if text:
+        for x, v, ha, off, d in ((0, before, "right", -9, dy[0]),
+                                 (1, after, "left", 9, dy[1])):
+            ax.annotate(f"{v:.1f}", (x, v), xytext=(off, d),
+                        textcoords="offset points", ha=ha, va="center",
+                        fontsize=9, color=color)
+
+
+def _label_offsets(a, b, span):
+    """Vertical label offsets (points) for two values that would print on
+    top of each other: the larger goes up, the smaller down."""
+    if not (np.isfinite(a) and np.isfinite(b)) or span <= 0 \
+            or abs(a - b) > 0.06 * span:
+        return 0, 0
+    return (7, -7) if a >= b else (-7, 7)
+
+
+def _slope_axes(ax, ylabel):
+    ax.set_xlim(-0.35, 1.35)
+    ax.set_xticks([0, 1], ["10 min before", "10 min after"])
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(bottom=0)
+    ax.grid(axis="x", visible=False)
+
+
+def fig_slope(change: pd.DataFrame, out: Path) -> None:
+    """Main figure: average per event, before and after, for go-arounds
+    and for normal landings at the same hours, with the go-around vs
+    normal ratio in each panel title."""
+    ch = change.set_index("measure")
+    panels = [(k, lab, scale) for k, lab, scale in
+              (("T1_any", "T1 encounters per 10-minute window", 1.0),
+               ("aircraft_time", "aircraft in the area (average)",
+                1.0 / (config.WINDOW_MIN * 60)))
+              if k in ch.index]
+    if not panels:
+        return
+    fig, axes = _fig(1, len(panels), figsize=(5.4 * len(panels), 4.6))
+    axes = np.atleast_1d(axes)
+    vals = ch.loc[[k for k, _, _ in panels],
+                  ["ga_mean_before", "ga_mean_after", "normal_mean_before",
+                   "normal_mean_after"]].to_numpy(float)
+    if not np.isfinite(vals).all():
+        plt.close(fig)
+        return
+    for ax, (k, lab, scale) in zip(axes, panels):
+        r = ch.loc[k]
+        top = max(r["ga_mean_before"], r["ga_mean_after"],
+                  r["normal_mean_before"], r["normal_mean_after"]) * scale
+        d0 = _label_offsets(r["ga_mean_before"], r["normal_mean_before"],
+                            top / scale)
+        d1 = _label_offsets(r["ga_mean_after"], r["normal_mean_after"],
+                            top / scale)
+        _slope(ax, r["normal_mean_before"] * scale,
+               r["normal_mean_after"] * scale, BASE,
+               "normal landings (same hours)", dy=(d0[1], d1[1]))
+        _slope(ax, r["ga_mean_before"] * scale, r["ga_mean_after"] * scale,
+               POST, "go-arounds", dy=(d0[0], d1[0]))
+        _slope_axes(ax, lab)
+        ax.set_ylim(0, top * 1.25)
+        ax.set_title(f"{lab[0].upper() + lab[1:]}\ngo-around vs normal "
+                     f"landing: {100 * (r['vs_normal'] - 1):+.0f}%  "
+                     f"[{100 * (r['vs_normal_lo'] - 1):+.0f}%, "
+                     f"{100 * (r['vs_normal_hi'] - 1):+.0f}%]",
+                     loc="left", fontsize=10)
+    h, lab_ = axes[0].get_legend_handles_labels()
+    fig.legend(h[::-1], lab_[::-1], loc="outside lower center", ncol=2,
+               fontsize=9)
+    _save(fig, out)
+
+
+def fig_raw_epoch(raw: pd.DataFrame, out: Path) -> None:
+    """Minute by minute, raw: aircraft in the area and T1 encounters per
+    minute around go-arounds and around hour-matched normal landings."""
+    if raw is None or raw.empty:
+        return
+    fig, (ax1, ax2) = _fig(2, 1, figsize=(10, 6.4), sharex=True)
+    for ax, col, lo, hi, lab in (
+            (ax1, "aircraft", "aircraft_lo", "aircraft_hi",
+             "aircraft in the area (average)"),
+            (ax2, "t1_per_event", "t1_lo", "t1_hi",
+             "T1 encounters per minute (average per event)")):
+        ax.axvspan(-2 * config.WINDOW_MIN, -config.WINDOW_MIN, color=BAND,
+                   alpha=0.5, lw=0)
+        ax.axvspan(-config.WINDOW_MIN, 0, color=PRE, alpha=0.06, lw=0)
+        ax.axvspan(0, config.WINDOW_MIN, color=POST, alpha=0.06, lw=0)
+        for grp, colr, name in (("normal landing", BASE,
+                                 "normal landings (same hours)"),
+                                ("go-around", POST, "go-arounds")):
+            d = raw[raw["group"] == grp]
+            if d.empty:
+                continue
+            x = d["minute"] + config.EPOCH_BIN_MIN / 2
+            ax.fill_between(x, d[lo], d[hi], color=colr, alpha=0.15, lw=0)
+            ax.plot(x, d[col], color=colr, lw=2, label=name)
+        ax.axvline(0, color=INK, lw=1)
+        ax.set_ylabel(lab)
+        ax.set_ylim(bottom=0)
+    ax2.set_xlabel("minutes from the go-around (climb start) or the "
+                   "landing (lowest point)")
+    ax2.plot([], [], color=BAND, lw=8, label="pre-trend check window")
+    ax2.fill_between([], [], [], color="0.6", alpha=0.3,
+                     label="95 % confidence band")
+    ax2.legend(fontsize=8.5, loc="upper center", bbox_to_anchor=(0.5, -0.2),
+               ncol=4)
+    _title(ax1, "Minute by minute around go-arounds and normal landings "
+                "(raw counts, no baseline)")
+    _save(fig, out)
+
+
+def fig_placebo(placebo: dict, out: Path) -> None:
+    """Where the go-arounds' change falls among random sets of
+    hour-matched normal landings."""
+    items = [(k, v) for k, v in placebo.items() if v]
+    if not items:
+        return
+    names = {"T1_any": "T1 encounters", "pair_hours": "Traffic"}
+    fig, axes = _fig(1, len(items), figsize=(5.0 * len(items), 3.8))
+    axes = np.atleast_1d(axes)
+    for ax, (k, p) in zip(axes, items):
+        r = np.asarray(p["ratios"])
+        lo = min(r.min(), p["ga_ratio"]); hi = max(r.max(), p["ga_ratio"])
+        bins = np.linspace(lo - 0.02, hi + 0.02, 40)
+        ax.hist(r, bins=bins, color=BASE, alpha=0.75, edgecolor=SURFACE,
+                label=f"{p['n_sets']:,} random sets of {p['n_events']} "
+                      "normal landings")
+        ax.axvline(p["ga_ratio"], color=POST, lw=2.4,
+                   label="the go-arounds")
+        ax.axvline(1, color=INK, lw=0.8, ls=":")
+        ax.set_xlabel(f"{names.get(k, k)}: after ÷ before")
+        ax.set_ylabel("number of random sets")
+        share = 100 * p["share_at_least_as_large"]
+        _title(ax, f"{names.get(k, k)}: {share:.1f}% of landing sets changed "
+                   "as much")
+        ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.22),
+                  ncol=1)
+    _save(fig, out)
+
+
+def fig_before_checks(g: pd.DataFrame, c: pd.DataFrame,
+                      before: pd.DataFrame, out: Path) -> None:
+    """Before-window checks for both groups: how unusual each
+    before-window was for its traffic (baseline), and how busy the
+    before-windows were."""
+    fig, (ax1, ax2) = _fig(1, 2, figsize=(11, 3.9),
+                           gridspec_kw={"width_ratios": [1.5, 1]})
+    lim = sps.norm.ppf(0.5 + config.LIMIT_WARNING / 2)
+    ax1.axvspan(-lim, lim, color=BAND, lw=0, label="normal range (95 %)")
+    rng = np.random.default_rng(0)
+    b = before.set_index("group")
+    ylab = []
+    for y, (name, df, colr) in enumerate((("go-arounds", g, POST),
+                                          ("normal landings", c, BASE))):
+        zc = "pre_T1_any_zmid" if "pre_T1_any_zmid" in df else "pre_T1_any_z"
+        if zc not in df:
+            continue
+        z = df.loc[~df["pre_bad"].astype(bool), zc].dropna().to_numpy()
+        if len(z) > 600:
+            z = rng.choice(z, 600, replace=False)
+        ax1.plot(z, y + rng.uniform(-0.25, 0.25, len(z)), "o", color=colr,
+                 ms=3.5, alpha=0.55)
+        share = b.loc[name, "in_normal_range"] if name in b.index else np.nan
+        ylab.append(f"{name}\n{100 * share:.0f}% in range"
+                    if np.isfinite(share) else name)
+    ax1.set_yticks(range(len(ylab)), ylab)
+    ax1.set_ylim(-0.6, len(ylab) - 0.4)
+    ax1.invert_yaxis()
+    ax1.grid(axis="y", visible=False)
+    ax1.axvline(0, color=BASE, lw=1)
+    ax1.set_xlim(-4, 4)
+    ax1.set_xlabel("how unusual the before-window's T1 count was for its "
+                   "traffic (z)")
+    ax1.legend(fontsize=8.5, loc="upper center", bbox_to_anchor=(0.5, -0.2))
+    _title(ax1, "Was the airspace normal before?")
+    gv = g.loc[~g["pre_bad"].astype(bool), "pre_pair_hours"].dropna()
+    cv = c.loc[~c["pre_bad"].astype(bool), "pre_pair_hours"].dropna()
+    if len(gv) and len(cv):
+        bins = np.linspace(0, max(gv.max(), cv.max()) * 1.02, 25)
+        ax2.hist(cv, bins=bins, density=True, color=BASE, alpha=0.5,
+                 label="normal landings")
+        ax2.hist(gv, bins=bins, density=True, histtype="step", color=POST,
+                 lw=2, label="go-arounds")
+    last = before.iloc[-1]
+    t = ("" if "traffic_ratio" not in last or not np.isfinite(
+        last.get("traffic_ratio", np.nan)) else
+         f"go-arounds ÷ landings {last['traffic_ratio']:.2f} "
+         f"[{last['traffic_ratio_lo']:.2f}, {last['traffic_ratio_hi']:.2f}]")
+    ax2.set_xlabel("traffic in the before-window (aircraft-pair hours)")
+    ax2.set_ylabel("share of windows")
+    ax2.set_yticks([])
+    ax2.legend(fontsize=8.5, loc="upper center", bbox_to_anchor=(0.5, -0.2),
+               ncol=2)
+    _title(ax2, "How busy was it before?" + (f"\n{t}" if t else ""))
+    _save(fig, out)
+
+
+def fig_robustness(rob: pd.DataFrame, out: Path) -> None:
+    """Go-around vs normal (T1 encounters) under every variation."""
+    if rob is None or rob.empty:
+        return
+    r = rob.reset_index(drop=True)
+    fig, ax = _fig(figsize=(10, 0.42 * len(r) + 1.6))
+    vals = []
+    for i, row in r.iterrows():
+        colr = INK if i == 0 else POST
+        if _ci_dot(ax, row["vs_normal"], row["vs_normal_lo"],
+                   row["vs_normal_hi"], i, colr, ms=6):
+            vals += [row["vs_normal"], row["vs_normal_lo"],
+                     row["vs_normal_hi"]]
+            ax.annotate(f"{100 * (row['vs_normal'] - 1):+.0f}%",
+                        (1.0, i), xycoords=("axes fraction", "data"),
+                        xytext=(6, 0), textcoords="offset points",
+                        va="center", fontsize=8.5, color=colr)
+    labels = [f"{v}  (n={int(n)})" + (f"\n{note}" if isinstance(note, str)
+                                      and note else "")
+              for v, n, note in zip(r["variation"], r["n_events"], r["note"])]
+    ax.set_yticks(range(len(r)), labels, fontsize=8)
+    ax.invert_yaxis()
+    ax.axvline(1, color=BASE, lw=1.2, ls="--")
+    _log_axis(ax, vals)
+    ax.set_xlabel("T1 encounters: change after a go-around ÷ change after a "
+                  "normal landing (log scale)")
+    _title(ax, "Does the result hold under other choices?")
+    _save(fig, out)
+
+
 def fig_epoch(epoch: pd.DataFrame, out: Path, count_text: str) -> None:
     fig, ax = _fig(figsize=(9.5, 3.9))
     ax.axvspan(-config.WINDOW_MIN, 0, color=PRE, alpha=0.06, lw=0)
@@ -313,7 +545,10 @@ def fig_forest(results: pd.DataFrame, out: Path) -> None:
 
 
 def fig_equilibrium(risk: pd.DataFrame, eq: dict, out: Path) -> None:
-    z = risk.loc[~risk["excluded"], f"pre_{PRIMARY_METRIC}_z"].dropna()
+    zc = (f"pre_{PRIMARY_METRIC}_zmid"
+          if f"pre_{PRIMARY_METRIC}_zmid" in risk.columns
+          else f"pre_{PRIMARY_METRIC}_z")
+    z = risk.loc[~risk["excluded"], zc].dropna()
     fig, ax = _fig(figsize=(9.5, 3.0))
     lim = sps.norm.ppf(0.5 + config.LIMIT_WARNING / 2)
     ax.axvspan(-lim, lim, color=BAND, lw=0, label="normal range (95 %)")
@@ -409,7 +644,9 @@ def fig_density(enc: pd.DataFrame, risk: pd.DataFrame, out: Path) -> None:
         ax.set_aspect("equal"); ax.set_xlim(-R, R); ax.set_ylim(-R, R)
         ax.set_xlabel("east of airport (NM)"); ax.set_ylabel("north (NM)")
         ax.grid(False)
-        _title(ax, f"{title} ({n:,} T1 encounters)")
+        _title(ax, f"{title} ({n:,} T1 encounters"
+                   + (", overlapping windows once)" if title.startswith("After")
+                      else ")"))
     fig.colorbar(im, ax=axes, label="share of encounters in each cell",
                  shrink=0.8)
     _save(fig, out)
@@ -417,14 +654,16 @@ def fig_density(enc: pd.DataFrame, risk: pd.DataFrame, out: Path) -> None:
 
 def fig_sensitivity(sens: pd.DataFrame, out: Path) -> None:
     s = sens[(sens["scope"] == "airspace") & sens["irr"].notna()].copy()
+    if "vs_normal" not in s.columns:
+        s["vs_normal"] = np.nan
     if s.empty:
         return
     s["label"] = [L.sensitivity_row(p, v) for p, v in
                   zip(s["parameter"], s["value"])]
     panels = [(c, lab) for c, lab in
-              (("total_ratio", "Total T1 encounters\nafter ÷ before"),
-               ("irr", "T1 per unit of traffic\nafter ÷ before"),
-               ("sir_post", "After the go-around\nvs normal traffic"))
+              (("vs_normal", "T1 encounters, go-around\nvs normal landing"),
+               ("total_ratio", "Total T1 encounters\nafter ÷ before"),
+               ("irr", "T1 per unit of traffic\nafter ÷ before"))
               if c in s.columns and s[c].notna().any()]
     fig, axes = _fig(1, len(panels), figsize=(4.1 * len(panels) + 2.8,
                                                0.3 * len(s) + 1.8),
@@ -478,6 +717,14 @@ def study_figures(res: dict, chk: dict, ev: pd.DataFrame, figdir: Path,
     figdir.mkdir(parents=True, exist_ok=True)
     risk = res["risk"]
     fig_change(res["change"], figdir / "change_vs_normal.png")
+    fig_slope(res["change"], figdir / "before_after_vs_landings.png")
+    comp = res.get("comparison") or {}
+    if comp:
+        fig_raw_epoch(comp["raw_epoch"], figdir / "minute_by_minute.png")
+        fig_placebo(comp["placebo"], figdir / "placebo.png")
+        fig_before_checks(res["ga_pairs"], res["ctl_pairs"], comp["before"],
+                          figdir / "before_window_checks.png")
+        fig_robustness(comp["robustness"], figdir / "robustness.png")
     fig_epoch(res["epoch"], figdir / "superposed_epoch.png",
               event_count_text(ev))
     fig_forest(res["results"], figdir / "forest.png")
@@ -554,28 +801,69 @@ def event_plots(res: dict, ev: pd.DataFrame, days: dict, outdir: Path) -> None:
     ev = ev.copy()
     ev["day"] = risk.reindex(ev["event_id"])["day"].to_numpy()
     files = {f.stem: f for f in res.get("files", [])}
-    for day, group in ev.groupby("day"):
+    gp = res.get("ga_pairs")
+    gp = gp.set_index("event_id") if gp is not None else None
+    cp = res.get("ctl_pairs")
+    n_days = ev["day"].nunique()
+    done = 0
+    for k, (day, group) in enumerate(ev.groupby("day")):
         raw = files.get(day)
         if raw is None:
             continue
+        print(f"  event plots: day {k + 1}/{n_days} ({day}), "
+              f"{done}/{len(ev)} done", flush=True)
         dg = build_day_grid(raw)
         g = dg.grid
         legs = dg.legs.set_index("leg")
         for _, e in group.iterrows():
             try:
+                pr = (gp.loc[e["event_id"]] if gp is not None
+                      and e["event_id"] in gp.index else None)
                 _plot_event(e, risk.loc[e["event_id"]], g, legs, enc, bl,
-                            spec, w, outdir)
+                            spec, w, outdir, pr, cp)
             except Exception as err:   # report, never absorb
                 print(f"  event plot failed {e['event_id']}: {err}", flush=True)
+            done += 1
 
 
-def _plot_event(e, r, g, legs, enc, bl, spec, w, outdir):
+def _landing_panel(ax, pr, sim, col, scale, ylabel, title, label):
+    """This event vs its most similar normal landings, before -> after."""
+    if pr is None or sim is None or sim.empty or f"pre_{col}" not in sim:
+        ax.text(0.5, 0.5, "no comparable normal landings", ha="center",
+                va="center", transform=ax.transAxes, color=MUTED)
+        ax.axis("off")
+        return
+    for _, s_ in sim.iloc[1:].iterrows():
+        ax.plot([0, 1], [s_[f"pre_{col}"] * scale, s_[f"post_{col}"] * scale],
+                color=BASE, lw=0.8, alpha=0.35, zorder=1)
+    mb = sim[f"pre_{col}"].mean() * scale
+    ma = sim[f"post_{col}"].mean() * scale
+    _slope(ax, mb, ma, BASE, f"average of the {len(sim)} most similar "
+                             "landings", lw=1.6, ls="--", ms=5, text=False)
+    best = sim.iloc[0]
+    when = pd.to_datetime(best["t0"], unit="s", utc=True)
+    _slope(ax, best[f"pre_{col}"] * scale, best[f"post_{col}"] * scale,
+           INK, f"most similar landing: {best.get('callsign', '')} "
+                f"rwy {best.get('runway', '')} {when:%m-%d %H:%M}Z",
+           lw=1.8, ms=6, text=False)
+    _slope(ax, pr[f"pre_{col}"] * scale, pr[f"post_{col}"] * scale, POST,
+           f"this {label}", lw=2.6, ms=8)
+    _slope_axes(ax, ylabel)
+    vals = np.concatenate([sim[f"pre_{col}"].to_numpy(float),
+                           sim[f"post_{col}"].to_numpy(float),
+                           [pr[f"pre_{col}"], pr[f"post_{col}"]]]) * scale
+    ax.set_ylim(0, max(np.nanmax(vals), 1e-9) * 1.25)
+    _title(ax, title)
+
+
+def _plot_event(e, r, g, legs, enc, bl, spec, w, outdir, pr=None, cp=None):
     from matplotlib.lines import Line2D
     from .events import event_label
     label = event_label(e["outcome"])
     t0 = int(e["t0"])
     R = spec.radius_nm
-    fig = plt.figure(figsize=(11, 14), layout="constrained")
+    fig = plt.figure(figsize=(11, 14.6), layout="constrained")
+    fig.get_layout_engine().set(rect=(0, 0.06, 1, 0.94))
     gs = fig.add_gridspec(5, 2, height_ratios=[1.3, 0.1, 0.38, 0.62, 0.95])
     ga_leg = legs[legs["icao24"] == e["icao24"]].index
 
@@ -660,49 +948,36 @@ def _plot_event(e, r, g, legs, enc, bl, spec, w, outdir):
                 ncol=3, fontsize=8)
     _title(ax_e, "Encounters over time (lower bar = closer)")
 
-    # ---- row 4: against the baseline
-    ax = fig.add_subplot(gs[4, 0])
-    model = bl.count_models.get(PRIMARY_METRIC)
-    rows = []
-    for name, wname, colr in (("pre", "before", PRE), ("post", "after", POST)):
-        mu = r.get(f"{name}_{PRIMARY_METRIC}_expected", np.nan)
-        y = r.get(f"{name}_{PRIMARY_METRIC}", np.nan)
-        if model is not None and np.isfinite(mu) and mu > 0:
-            k = np.arange(0, int(max(mu * 3, y if np.isfinite(y) else 0, 5)) + 3)
-            pmf = count_pmf(k, mu, model.alpha)
-            ax.plot(k, pmf, drawstyle="steps-mid", color=colr, lw=1.5,
-                    label=f"normal range, {wname} (expected {mu:.1f})")
-            if np.isfinite(y):
-                ax.plot([y], [count_pmf(np.array([y]), mu, model.alpha)[0]],
-                        "o", color=colr, ms=9, zorder=5)
-        oe = r.get(f"{name}_{PRIMARY_METRIC}_oe", np.nan)
-        z = r.get(f"{name}_{PRIMARY_METRIC}_z", np.nan)
-        rows.append([wname, f"{y:.0f}" if np.isfinite(y) else "-",
-                     f"{mu:.1f}" if np.isfinite(mu) else "-",
-                     f"{oe:.2f}" if np.isfinite(oe) else "-",
-                     f"{z:.2f}" if np.isfinite(z) else "-",
-                     "yes" if r.get(f"{name}_{PRIMARY_METRIC}_in_control",
-                                    False) else "no"])
-    ax.set_xlabel("T1 encounters in the 10-minute window")
-    ax.set_ylabel("chance under normal traffic")
-    if ax.get_legend_handles_labels()[0]:
-        ax.legend(fontsize=8, loc="upper right")
+    # ---- row 4: against similar normal landings (same hour of day,
+    # same runway flow when possible, closest before-window traffic)
+    from .compare import similar_landings
+    sim = (similar_landings(pr, cp, k=10) if pr is not None and cp is not None
+           and len(cp) else None)
+    ax_l = fig.add_subplot(gs[4, 0])
+    _landing_panel(ax_l, pr, sim, "T1_any", 1.0, "T1 encounters in the window",
+                   "T1 encounters vs similar normal landings", label)
+    ax_r = fig.add_subplot(gs[4, 1], sharex=ax_l)
+    _landing_panel(ax_r, pr, sim, "aircraft_s",
+                   1.0 / (config.WINDOW_MIN * 60), "aircraft in the area "
+                   "(average)", "Traffic vs similar normal landings", label)
+    if ax_l.get_legend_handles_labels()[0]:
+        h, lab = ax_l.get_legend_handles_labels()
+        fig.legend(h[::-1], lab[::-1], loc="lower center", ncol=3,
+                   fontsize=8.5, bbox_to_anchor=(0.5, 0.0))
+    # baseline check of this event's before-window, in one line
+    mu = r.get(f"pre_{PRIMARY_METRIC}_expected", np.nan)
+    y = r.get(f"pre_{PRIMARY_METRIC}", np.nan)
+    zc = r.get(f"pre_{PRIMARY_METRIC}_zmid", r.get(f"pre_{PRIMARY_METRIC}_z",
+                                                   np.nan))
+    if np.isfinite(mu) and mu > 0 and np.isfinite(y):
+        ok = bool(r.get(f"pre_{PRIMARY_METRIC}_in_control", False))
+        check = (f"Before-window vs the baseline: {y:.0f} T1 encounters, "
+                 f"{mu:.1f} expected for the traffic (z {zc:+.1f}) - "
+                 + ("within the normal range" if ok else
+                    "ABOVE the normal range"))
     else:
-        ax.text(0.5, 0.5, "no aircraft pairs in the area in either window:\n"
-                "nothing to compare",
-                transform=ax.transAxes, ha="center", va="center",
-                fontsize=9, color=MUTED)
-    _title(ax, "T1 encounters vs normal traffic (dot = what happened)")
-    ax = fig.add_subplot(gs[4, 1])
-    ax.axis("off")
-    tb = ax.table(cellText=rows,
-                  colLabels=["window", "T1\nencounters", "expected\nfor traffic",
-                             "observed\n÷ expected", "how unusual\n(z)",
-                             "normal\nrange"],
-                  loc="center", cellLoc="center",
-                  colWidths=[0.14, 0.15, 0.17, 0.17, 0.2, 0.14])
-    tb.auto_set_font_size(False); tb.set_fontsize(8.5); tb.scale(1, 2.4)
-    _title(ax, "Before and after vs normal traffic")
+        check = "Before-window vs the baseline: no aircraft pairs to compare"
+    fig.text(0.5, 0.035, check, ha="center", fontsize=9, color=MUTED)
     fig.suptitle(f"{label.upper()}  {e['callsign']} ({e['icao24']})  ·  "
                  f"runway {e['runway']}  ·  {e['t0_utc']:%Y-%m-%d %H:%M:%S} UTC",
                  fontsize=12)

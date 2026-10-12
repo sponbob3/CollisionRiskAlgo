@@ -3,6 +3,8 @@
 Single entry point for the proximity-risk pipeline.
 
 Usage:
+    python run_proximity.py                           # asks questions
+                                                      # (interactive)
     python run_proximity.py KBNA_2025                 # full run
     python run_proximity.py KBNA_2025 --limit 5       # first 5 days (test)
     python run_proximity.py KBNA_2025 --goaround-run 3   # reuse detection
@@ -89,6 +91,12 @@ def cmd_check_data(name: str | None, limit: int | None) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) == 1:
+        # no arguments: interactive questions (also what the
+        # double-clickable "Run Proximity Analysis.command" starts)
+        from proximity_pipeline import wizard
+        wizard.run()
+        return
     if len(sys.argv) >= 3 and sys.argv[1] == "new-airport":
         cmd_new_airport(sys.argv[2],
                         sys.argv[3] if len(sys.argv) >= 4 else None)

@@ -315,12 +315,16 @@ def analyse(days: dict, app: pd.DataFrame, spec, ev: pd.DataFrame,
             baseline_dir: Path | None, rebuild: bool, validate: bool,
             reps: int, quiet: bool = False, ds_sig: str = "",
             baseline_from: Path | None = None,
-            error_model=None) -> dict:
+            error_model=None, full: bool = True) -> dict:
     """Encounters -> windows -> baseline -> events -> statistics for one
     Spec. Returns a dict of tables (the sensitivity sweep calls this with
-    varied inputs and validate=False). The conflict-probability model
-    (section 7) runs only when an error_model is given (--probability)."""
+    varied inputs, validate=False and full=False). The conflict-
+    probability model (section 7) runs only when an error_model is given
+    (--probability). full=False skips the checks around the comparison
+    with normal landings (before-window scoring of the landings,
+    pre-trend, placebo, regression, robustness, minute-by-minute)."""
     from . import windows as W, events as E, stats as S, baseline as B
+    from . import compare as C
     tiers = spec.tiers
     exp = W.Exposure(days, spec)
     enc = pd.concat([W.day_encounters(dc, spec) for dc in days.values()],
@@ -377,15 +381,35 @@ def analyse(days: dict, app: pd.DataFrame, spec, ev: pd.DataFrame,
     ewm = W.interval_metrics(ew, exp, enc, days, usage, expected_cols(ew))
     ewm["day"] = [_day_of(int(t), days) for t in ewm["t_start"]]
     scored = S.score_event_windows(ewm, bl, config.RANDOM_SEED)
+    if f"{S.PRIMARY}_exceed95" in scored.columns:
+        scored[f"{S.PRIMARY}_in_control"] = ~scored[
+            f"{S.PRIMARY}_exceed95"].astype(bool)
     metrics = B.count_metrics(tiers) + B.continuous_metrics(tiers)
     risk = S.event_risk_table(scored, ev, metrics)
     risk["day"] = [_day_of(int(t), days) for t in risk["t0"]]
 
-    # normal landings at the same hours: the same windows, airspace-wide
-    # (data only, never plotted individually)
-    cw = E.event_windows(ctl)
-    cwm = W.interval_metrics(cw, exp, enc, days, usage)
+    # normal landings: the same windows, airspace-wide (data only; each
+    # event plot shows its most similar landings). With full=True also
+    # the window before the before-window (pre-trend check) and the
+    # baseline scores of the landing windows, from models that did not
+    # see the landing's own month (score_held_out).
+    which = ("early", "pre", "post") if full else ("pre", "post")
+    cw = E.event_windows(ctl, which)
+    cwm = W.interval_metrics(cw, exp, enc, days, usage, with_smin=False)
     cwm["day"] = [_day_of(int(t), days) for t in cwm["t_start"]]
+    ctl_scoring = "not scored"
+    if full and S.PRIMARY in bl.count_models and len(cwm):
+        sc, ctl_scoring = B.score_held_out(bl, cwm, S.PRIMARY,
+                                           config.RANDOM_SEED)
+        cwm = pd.concat([cwm, sc], axis=1)
+        cwm[f"{S.PRIMARY}_in_control"] = ~cwm[
+            f"{S.PRIMARY}_exceed95"].astype(bool)
+    gwin = scored
+    if full and len(ev):
+        eew = W.interval_metrics(E.event_windows(ev, ("early",)), exp, enc,
+                                 days, usage, with_smin=False)
+        eew["day"] = [_day_of(int(t), days) for t in eew["t_start"]]
+        gwin = pd.concat([scored, eew], ignore_index=True)
 
     # statistics (section 11): per unit of traffic against the baseline
     results = [S.primary_results(risk, bl, "airspace", "all", reps)]
@@ -405,10 +429,17 @@ def analyse(days: dict, app: pd.DataFrame, spec, ev: pd.DataFrame,
     eq["scope"] = "airspace"
 
     # totals, traffic and the comparison with normal landings (11.6)
-    cols = ["aircraft_s", "pair_hours"] + [f"{t}_any" for t in tiers]
-    ga_pairs = S.paired_windows(ewm, ev, cols)
-    ctl_pairs = S.paired_windows(cwm, ctl, cols)
-    change = S.change_summary(ga_pairs, ctl_pairs, reps, config.RANDOM_SEED)
+    cols = (["aircraft_s", "pair_hours"] + [f"{t}_any" for t in tiers]
+            + ["T1_observed"])
+    seed = config.RANDOM_SEED
+    ga_pairs = C.paired_windows(gwin, ev, cols, which)
+    ctl_pairs = C.paired_windows(cwm, ctl, cols, which)
+    C.add_traffic_band(ga_pairs, ctl_pairs)
+    change = C.change_summary(ga_pairs, ctl_pairs, reps, seed)
+    comparison = {}
+    if full and len(ev):
+        comparison = _comparison(ga_pairs, ctl_pairs, ev, ctl, exp, enc,
+                                 days, usage, reps, seed, ctl_scoring)
 
     # the go-around aircraft itself vs the other aircraft present (11.7)
     einv = E.involved_frame(ewm, enc, ev, exp, "ga", tiers)
@@ -423,7 +454,45 @@ def analyse(days: dict, app: pd.DataFrame, spec, ev: pd.DataFrame,
             "event_windows": scored, "risk": risk, "results": results,
             "equilibrium": pd.DataFrame([eq]), "epoch": epoch,
             "change": change, "involvement": involvement,
+            "ga_pairs": ga_pairs, "ctl_pairs": ctl_pairs,
+            "comparison": comparison,
             "calibration": calib, "prob_tables": prob_tables}
+
+
+def _comparison(g, c, ev, ctl, exp, enc, days, usage, reps, seed,
+                ctl_scoring) -> dict:
+    """The checks around the comparison with normal landings
+    (FRAMEWORK.md section 11.6): before-window checks for both groups,
+    pre-trend, placebo, regression confirmation, robustness set,
+    leave-one-out and the raw minute-by-minute curves."""
+    from . import compare as C, events as E, windows as W
+    out = {"landing_scoring": ctl_scoring}
+    out["before"] = C.before_checks(g, c, reps, seed)
+    out["pretrend"] = C.change_summary(g, c, reps, seed, frm="early",
+                                       to="pre")
+    out["placebo"] = {col: C.placebo(g, c, col, reps, seed)
+                      for col in ("T1_any", "pair_hours")}
+    out["regression"] = pd.DataFrame(
+        [r for r in (C.regression_check(g, c, "T1_any"),
+                     C.regression_check(g, c, "pair_hours")) if r])
+    # other window lengths: same events and landings, windows re-cut
+    extra = []
+    cols = ["aircraft_s", "pair_hours", "T1_any", "T1_observed"]
+    for wmin in config.WINDOW_SENSITIVITY_MIN:
+        frames = []
+        for tab in (ev, ctl):
+            t2 = tab.copy()
+            t2["t_pre_start"] = t2["t0"] - int(wmin * 60)
+            t2["t_post_end"] = t2["t0"] + int(wmin * 60)
+            wm2 = W.interval_metrics(E.event_windows(t2), exp, enc, days,
+                                     usage, with_smin=False)
+            wm2["day"] = [_day_of(int(t), days) for t in wm2["t_start"]]
+            frames.append(C.paired_windows(wm2, t2, cols))
+        extra.append((f"{wmin:g}-minute windows", frames[0], frames[1]))
+    out["robustness"] = C.robustness(g, c, "T1_any", reps, seed, extra)
+    out["leave_one_out"] = C.leave_one_out(g, c, "T1_any")
+    out["raw_epoch"] = C.raw_epoch(g, c, exp, enc, reps, seed)
+    return out
 
 
 def baseline_param_hash_for(spec, window_min: float, exclusion_min: float) -> str:
@@ -584,6 +653,7 @@ def _write_common(run_dir, dataset, files, argv, res, chk, ev, ctl, heights,
     risk = res["risk"].merge(heights, on="event_id", how="left")
     risk.to_csv(run_dir / "go_around_risk.csv", index=False)
     res["change"].to_csv(run_dir / "change_summary.csv", index=False)
+    _write_comparison(run_dir, res)
     res["involvement"].to_csv(run_dir / "go_around_aircraft.csv", index=False)
     res["results"].to_csv(run_dir / "results_primary.csv", index=False)
     res["equilibrium"].to_csv(run_dir / "equilibrium.csv", index=False)
@@ -626,9 +696,87 @@ def _write_common(run_dir, dataset, files, argv, res, chk, ev, ctl, heights,
     dump_run_config(run_dir, dataset, len(files), argv, extra)
 
 
+def _write_comparison(run_dir: Path, res: dict) -> None:
+    """CSV outputs of the comparison with normal landings."""
+    res["ctl_pairs"].to_csv(run_dir / "landing_windows.csv", index=False)
+    comp = res.get("comparison") or {}
+    if not comp:
+        return
+    d = run_dir / "landing_comparison"
+    d.mkdir(exist_ok=True)
+    comp["before"].to_csv(d / "before_window_checks.csv", index=False)
+    comp["pretrend"].to_csv(d / "pretrend.csv", index=False)
+    comp["regression"].to_csv(d / "regression_check.csv", index=False)
+    comp["robustness"].to_csv(d / "robustness.csv", index=False)
+    comp["leave_one_out"].to_csv(d / "leave_one_out.csv", index=False)
+    comp["raw_epoch"].to_csv(d / "minute_by_minute.csv", index=False)
+    pl = comp["placebo"]
+    pd.DataFrame([{k: v for k, v in r.items() if k != "ratios"}
+                  for r in pl.values() if r]).to_csv(d / "placebo.csv",
+                                                     index=False)
+    pd.DataFrame({k: pd.Series(r["ratios"]) for k, r in pl.items() if r}
+                 ).to_csv(d / "placebo_sets.csv", index=False)
+
+
 def result_lines(res: dict) -> list[str]:
-    """Console summary of the main results, in plain words."""
+    """Console summary of the main results, in plain words: the
+    comparison with normal landings first, then the checks behind it,
+    then the per-traffic (mechanism) results."""
     out = []
+    ch = res["change"].set_index("measure") if len(res["change"]) else None
+    if ch is not None:
+        for key in ("T1_any", "pair_time"):
+            if key in ch.index:
+                r = ch.loc[key]
+                out.append(f"{r['label'].upper()}: go-around vs normal landing "
+                           f"{r['vs_normal']:.2f} [{r['vs_normal_lo']:.2f}, "
+                           f"{r['vs_normal_hi']:.2f}]  (after/before: "
+                           f"go-arounds {r['ratio']:.2f} [{r['ratio_lo']:.2f}"
+                           f", {r['ratio_hi']:.2f}], normal landings "
+                           f"{r['normal_ratio']:.2f})")
+    comp = res.get("comparison") or {}
+    if comp:
+        b = comp["before"].set_index("group")
+        for grp in ("go-arounds", "normal landings"):
+            if grp in b.index and "in_normal_range" in b.columns:
+                r = b.loc[grp]
+                out.append(f"BEFORE-WINDOW, {grp.upper()}: "
+                           f"{100 * r['in_normal_range']:.0f}% in the normal "
+                           f"range; observed/expected {r['oe_before']:.2f} "
+                           f"[{r['oe_before_lo']:.2f}, {r['oe_before_hi']:.2f}]")
+        last = comp["before"].iloc[-1]
+        if "traffic_ratio" in last and np.isfinite(last["traffic_ratio"]):
+            out.append(f"BEFORE-WINDOW TRAFFIC, go-arounds / landings: "
+                       f"{last['traffic_ratio']:.2f} "
+                       f"[{last['traffic_ratio_lo']:.2f}, "
+                       f"{last['traffic_ratio_hi']:.2f}]")
+        pt = comp["pretrend"].set_index("measure")
+        if "T1_any" in pt.index:
+            r = pt.loc["T1_any"]
+            out.append(f"PRE-TREND (T1, 20-10 min before -> last 10 min): "
+                       f"go-around vs normal {r['vs_normal']:.2f} "
+                       f"[{r['vs_normal_lo']:.2f}, {r['vs_normal_hi']:.2f}]"
+                       f"  (about 1 = parallel before the event)")
+        p = comp["placebo"].get("T1_any") or {}
+        if p:
+            out.append(f"PLACEBO (T1): {100 * p['share_at_least_as_large']:.1f}"
+                       f"% of {p['n_sets']} random sets of hour-matched "
+                       f"landings changed as much as the go-arounds "
+                       f"(p = {p['p_value']:.3f})")
+        rg = comp["regression"]
+        if len(rg):
+            r = rg.iloc[0]
+            out.append(f"REGRESSION CHECK (T1, adjusted for hour and flow): "
+                       f"{r['ratio']:.2f} [{r['ratio_lo']:.2f}, "
+                       f"{r['ratio_hi']:.2f}]  p = {r['p_value']:.3f}")
+        rb = comp["robustness"]
+        if len(rb):
+            out.append(f"ROBUSTNESS (T1, go-around vs normal): "
+                       f"{rb['vs_normal'].min():.2f} to "
+                       f"{rb['vs_normal'].max():.2f} across "
+                       f"{len(rb)} variations; "
+                       f"{int((rb['vs_normal_lo'] > 1).sum())} with the "
+                       f"interval above 1")
     eq = res["equilibrium"].iloc[0] if len(res["equilibrium"]) else None
     if eq is not None:
         out.append(f"BEFORE-GO-AROUND CHECK: {eq['verdict']}  "
@@ -636,17 +784,6 @@ def result_lines(res: dict) -> list[str]:
                    f"in the normal range; observed/expected "
                    f"{eq['sir_pre']:.2f} [{eq['sir_pre_ci'][0]:.2f}, "
                    f"{eq['sir_pre_ci'][1]:.2f}])")
-    ch = res["change"].set_index("measure") if len(res["change"]) else None
-    if ch is not None:
-        for key in ("T1_any", "pair_time"):
-            if key in ch.index:
-                r = ch.loc[key]
-                out.append(f"{r['label'].upper()}: after/before "
-                           f"{r['ratio']:.2f} [{r['ratio_lo']:.2f}, "
-                           f"{r['ratio_hi']:.2f}]  (normal landings "
-                           f"{r['normal_ratio']:.2f}; go-around vs normal "
-                           f"{r['vs_normal']:.2f} [{r['vs_normal_lo']:.2f}, "
-                           f"{r['vs_normal_hi']:.2f}])")
     prim = res["results"][(res["results"]["endpoint"] == "T1_any")
                           & (res["results"]["event_set"] == "all")]
     for _, r in prim.iterrows():

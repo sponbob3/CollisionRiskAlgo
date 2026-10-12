@@ -21,7 +21,8 @@ from . import windows as W
 from .pipeline import analyse
 
 COLUMNS = ["parameter", "value", "is_base", "scope", "endpoint",
-           "event_set", "n_events", "total_ratio", "total_ratio_lo",
+           "event_set", "n_events", "vs_normal", "vs_normal_lo",
+           "vs_normal_hi", "total_ratio", "total_ratio_lo",
            "total_ratio_hi", "irr", "irr_lo", "irr_hi", "sir_pre",
            "sir_pre_lo", "sir_pre_hi", "sir_post", "sir_post_lo",
            "sir_post_hi", "baseline_model", "elapsed_s"]
@@ -43,6 +44,11 @@ def _rows(param, value, res, endpoint="T1_any", event_set="all",
         rows.append({"parameter": param, "value": value, "is_base": is_base,
                      "scope": scope, "endpoint": endpoint,
                      "event_set": event_set, "n_events": x["n_events"],
+                     "vs_normal": tot["vs_normal"] if tot is not None else np.nan,
+                     "vs_normal_lo": (tot["vs_normal_lo"] if tot is not None
+                                      else np.nan),
+                     "vs_normal_hi": (tot["vs_normal_hi"] if tot is not None
+                                      else np.nan),
                      "total_ratio": tot["ratio"] if tot is not None else np.nan,
                      "total_ratio_lo": (tot["ratio_lo"] if tot is not None
                                         else np.nan),
@@ -123,10 +129,13 @@ def sweep(days: dict, app: pd.DataFrame, ev: pd.DataFrame,
                             config.RANDOM_SEED)
         try:
             res = analyse(days, app, sp, e, c, w, ex, None,
-                          rebuild=True, validate=False, reps=reps, quiet=True)
+                          rebuild=True, validate=False, reps=reps, quiet=True,
+                          full=False)
             rows += _rows(param, value, res, elapsed=round(time.time() - t, 1))
             r = [x for x in rows[-1:] if x["scope"] == "airspace"]
-            msg = (f"total T1 after/before {r[0]['total_ratio']:.2f}  "
+            msg = (f"T1 go-around vs normal {r[0]['vs_normal']:.2f} "
+                   f"[{r[0]['vs_normal_lo']:.2f}, {r[0]['vs_normal_hi']:.2f}]  "
+                   f"total after/before {r[0]['total_ratio']:.2f}  "
                    f"per traffic {r[0]['irr']:.2f} [{r[0]['irr_lo']:.2f}, "
                    f"{r[0]['irr_hi']:.2f}]  after vs normal "
                    f"{r[0]['sir_post']:.2f}" if r else "no result")

@@ -198,7 +198,14 @@ class CountModel:
         z = stats.norm.ppf(u)
         ok = mu > 0
         z = np.where(ok, z, np.nan)
+        # mid-quantile z for display: the randomised z above is right for
+        # the distribution tests, but for small counts a single window can
+        # land far in the tail by chance (e.g. 0 of 2 expected -> z -4.6)
+        zmid = stats.norm.ppf(np.clip(cdf_ym1 + 0.5 * pmf_y, 1e-10,
+                                      1 - 1e-10))
+        zmid = np.where(ok, zmid, np.nan)
         return pd.DataFrame({
+            f"{self.metric}_zmid": zmid,
             f"{self.metric}_expected": mu,
             f"{self.metric}_oe": np.where(mu > 0, y / np.maximum(mu, 1e-12),
                                           np.nan),
@@ -578,6 +585,40 @@ def out_of_sample(df: pd.DataFrame, metric: str, seed: int) -> dict:
         "z": z[ok].tolist(), "pit": pit[ok].tolist(),
         "held_index": np.concatenate(held)[ok].tolist(),
     }
+
+
+def score_held_out(bl: "Baseline", df: pd.DataFrame, metric: str,
+                   seed: int = 0) -> tuple[pd.DataFrame, str]:
+    """Score windows that overlap the baseline's own training data (the
+    landing windows) without letting the baseline see them: for each
+    fold (month, or week / day for short datasets), refit the model on
+    the baseline windows of the other folds and score this fold's
+    windows. Returns the scores and the fold kind ("in-sample" when the
+    model is a pooled rate or there are too few folds)."""
+    model = bl.count_models.get(metric)
+    train = bl.windows
+    if (model is None or model.kind == "pooled" or train is None
+            or train.empty or df.empty or metric not in train.columns):
+        return (model.score(df, seed=seed) if model is not None
+                else pd.DataFrame(index=df.index)), "in-sample"
+    tr = train[train["pair_hours"] > 0]
+    folds_tr, kind = fold_labels(tr)
+    if kind == "month":
+        folds_df = df["month"].astype(str).to_numpy()
+    elif kind == "week":
+        folds_df = pd.to_datetime(df["t_start"], unit="s", utc=True
+                                  ).dt.strftime("%G-W%V").to_numpy()
+    else:
+        folds_df = df["day"].astype(str).to_numpy()
+    if len(np.unique(folds_tr)) < 2:
+        return model.score(df, seed=seed), "in-sample"
+    parts = []
+    for f in np.unique(folds_df):
+        test = df[folds_df == f]
+        fit_on = tr[folds_tr != f]
+        m = fit_count_model(fit_on, metric) if len(fit_on) >= 20 else model
+        parts.append(m.score(test, seed=seed))
+    return pd.concat(parts).reindex(df.index), kind
 
 
 def stability_curve(df: pd.DataFrame, metric: str, seed: int) -> dict:

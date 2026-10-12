@@ -132,14 +132,21 @@ def control_table(approaches: pd.DataFrame, window_min: float,
     return out.sort_values("t0").reset_index(drop=True)
 
 
-def event_windows(events: pd.DataFrame) -> pd.DataFrame:
-    """Two interval rows (pre, post) per event, for interval_metrics."""
+def event_windows(events: pd.DataFrame,
+                  which: tuple[str, ...] = ("pre", "post")) -> pd.DataFrame:
+    """Interval rows per event for interval_metrics: pre and post by
+    default; "early" is the window before the pre window (same length),
+    used by the pre-trend check."""
     rows = []
     for _, e in events.iterrows():
-        rows.append({"event_id": e["event_id"], "window": "pre",
-                     "t_start": int(e["t_pre_start"]), "t_end": int(e["t0"])})
-        rows.append({"event_id": e["event_id"], "window": "post",
-                     "t_start": int(e["t0"]), "t_end": int(e["t_post_end"])})
+        w = int(e["t0"]) - int(e["t_pre_start"])
+        spans = {"early": (int(e["t_pre_start"]) - w, int(e["t_pre_start"])),
+                 "pre": (int(e["t_pre_start"]), int(e["t0"])),
+                 "post": (int(e["t0"]), int(e["t_post_end"]))}
+        for name in which:
+            a, b = spans[name]
+            rows.append({"event_id": e["event_id"], "window": name,
+                         "t_start": a, "t_end": b})
     return pd.DataFrame(rows, columns=["event_id", "window", "t_start",
                                        "t_end"])
 

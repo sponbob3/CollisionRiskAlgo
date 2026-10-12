@@ -46,6 +46,14 @@ def test_window_metrics_are_consistent(synth_dataset, kbna, tmp_path):
     assert set(wm["quality"]) <= {"good", "degraded", "bad"}
     assert wm["local_hour"].between(0, 23).all()
     assert set(wm["daytype"]) <= {"weekday", "weekend"}
+    # the vectorised sums used by the minute-by-minute curves agree with
+    # interval() (also across midnight)
+    a = cw["t_start"].to_numpy()[::17]
+    b = a + 1800
+    ac, ps = exp.sums(a, b)
+    for i in range(len(a)):
+        m_ = exp.interval(int(a[i]), int(b[i]))
+        assert ac[i] == m_["aircraft_s"] and ps[i] == m_["pair_s"]
     # a window crossing into a missing day is partial
     m = exp.interval(int(cw["t_start"].iat[0]) - 300, int(cw["t_start"].iat[0]) + 300)
     assert m["partial"]

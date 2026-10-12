@@ -32,7 +32,17 @@ python -m pip install -r requirements.txt
 #   e.g. datasets/KMCO_2025Q1/2025-01/KMCO_20250101.parquet
 python run_proximity.py check-data KMCO_2025Q1    # audit the data first
 python run_proximity.py KMCO_2025Q1               # the whole analysis
+python run_proximity.py                           # or: answer questions
 ```
+
+**No typing needed:** `python run_proximity.py` with no arguments asks
+which dataset to analyse, shows what it found (days of data, airport
+profile, pairwise cache, earlier go-around runs, stored baseline), asks
+what to produce (figures, per-event pictures, sensitivity analysis), shows
+the equivalent command and starts. On a Mac you can instead double-click
+**`Run Proximity Analysis.command`** in Finder: it opens Terminal, uses
+the `.venv` environment, and asks the same questions. (If macOS blocks it
+the first time: right-click it, choose Open, then Open.)
 
 The airport profile is created automatically on the first run (see
 below); nothing has to be edited by hand. Events are go-arounds and
@@ -45,7 +55,7 @@ One run writes two fresh numbered folders with the same number:
 | folder | content |
 |---|---|
 | `output/KBNA/goaround/run_NN/` | the go-around pipeline's outputs (`all_approaches.csv`, `go_around_events.csv`, `summary.pdf`, per-event plots, `run_config.txt`); climb-aways whose low point was hidden below the ADS-B coverage floor are go-arounds (`reclassified_from`, `low_point_hidden_s` columns; FRAMEWORK.md section 13) |
-| `output/KBNA/proximity_risk/run_NN/` | `summary.pdf` (key results in plain sentences, checks and a glossary on page 1; every figure captioned), `change_summary.csv` (totals, traffic, and the same change around normal landings), `go_around_aircraft.csv` (the event aircraft vs other aircraft), `results_primary.csv` (rates per unit of traffic: IRR / SIR per endpoint), `go_around_risk.csv` (one row per go-around or touch-and-go), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around or touch-and-go), `run_config.txt` |
+| `output/KBNA/proximity_risk/run_NN/` | `summary.pdf` (key results in plain sentences, checks and a glossary on page 1; every figure captioned), `change_summary.csv` (the main result: the before → after change around go-arounds vs the same change around normal landings at the same hours), `landing_comparison/` (the checks behind it: before-window checks of both groups against the baseline, pre-trend, placebo, regression, robustness, leave-one-out, minute by minute), `landing_windows.csv`, `go_around_aircraft.csv` (the event aircraft vs other aircraft), `results_primary.csv` (rates per unit of traffic: IRR / SIR per endpoint), `go_around_risk.csv` (one row per go-around or touch-and-go), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around or touch-and-go), `run_config.txt` |
 | `output/KBNA/proximity_risk/baseline/<label>/` | the stored, validated baseline (`baseline.json`, `baseline_windows.parquet`, `phase1_removed.csv`, `validation/`, `baseline_report.pdf`), reused automatically while the data and parameters match |
 
 Every command and option, with examples, is in **TERMINAL_COMMANDS.pdf**
@@ -108,7 +118,8 @@ report time before either stage runs (FRAMEWORK.md section 4.2).
 ## Repository layout
 
 ```
-run_proximity.py              <- the only file you run
+run_proximity.py              <- the only file you run (no arguments: asks questions)
+Run Proximity Analysis.command <- macOS: double-click in Finder to start
 FRAMEWORK.md                  <- method and build specification
 TERMINAL_COMMANDS.pdf         <- every command with examples
 airports/<ICAO>.yaml          <- airport profiles (+ airspace, flows)
@@ -127,6 +138,8 @@ proximity_pipeline/
   baseline.py                 regression baseline, Phase I/II, validation
   events.py                   event windows, clusters, matched controls
   stats.py                    IRR, SIR, equilibrium, power, epoch
+  compare.py                  comparison with normal landings and its checks
+  wizard.py                   the questions asked when started without arguments
   sensitivity.py              one-at-a-time sweep
   pipeline.py                 per-day cache and run orchestration
   goaround_adapter.py         the only bridge to goaround_pipeline

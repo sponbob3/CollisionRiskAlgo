@@ -50,8 +50,8 @@ def event_risk_table(scored: pd.DataFrame, events: pd.DataFrame,
             if m not in src.columns:
                 continue
             cols[f"{w}_{m}"] = src[m]
-            for suf in ("expected", "oe", "z", "p_upper", "exceed95",
-                        "exceed99", "pct"):
+            for suf in ("expected", "oe", "z", "zmid", "p_upper",
+                        "exceed95", "exceed99", "pct"):
                 col = f"{m}_{suf}"
                 if col in src.columns:
                     cols[f"{w}_{m}_{suf}"] = src[col]
@@ -378,120 +378,25 @@ def superposed_epoch(events: pd.DataFrame, exposure, enc: pd.DataFrame,
 # aircraft stays airborne instead of landing), so the totals and the
 # traffic change are reported as well, and both are compared with the
 # same before/after change around normal landings at the same hours of
-# day (FRAMEWORK.md section 11.6).
+# day (FRAMEWORK.md section 11.6). The comparison lives in compare.py;
+# these names are kept for the callers that import them from here.
 
-CHANGE_MEASURES = [
-    # (key, column in the paired frame, label)
-    ("aircraft_time", "aircraft_s", "Aircraft time in the area"),
-    ("pair_time", "pair_hours", "Traffic (aircraft-pair time)"),
-    ("T1_any", "T1_any", "T1 encounters"),
-    ("T2_any", "T2_any", "T2 close encounters"),
-    ("T3_any", "T3_any", "T3 near-collision encounters"),
-]
-
-
-def paired_windows(win: pd.DataFrame, events: pd.DataFrame,
-                   cols: list[str]) -> pd.DataFrame:
-    """One row per event with pre_<col> and post_<col> from the window
-    metrics of its two windows, plus day, local hour of t0 and an
-    excluded flag (bad-quality or partially covered windows)."""
-    pre = win[win["window"] == "pre"].set_index("event_id")
-    post = win[win["window"] == "post"].set_index("event_id")
-    base = events.set_index("event_id")
-    out = pd.DataFrame(index=base.index)
-    for w, src in (("pre", pre), ("post", post)):
-        src = src.reindex(base.index)
-        for c in cols:
-            if c in src.columns:
-                out[f"{w}_{c}"] = src[c].to_numpy(float)
-        out[f"{w}_bad"] = ((src["quality"] == "bad")
-                           | src["partial_coverage"].fillna(True)
-                           .astype(bool)).to_numpy()
-    out["excluded"] = out["pre_bad"] | out["post_bad"]
-    out["day"] = post.reindex(base.index)["day"].to_numpy()
-    t0 = pd.to_datetime(base["t0"].to_numpy(), unit="s", utc=True)
-    out["hour"] = t0.tz_convert(config_local_tz()).hour
-    return out.reset_index()
-
-
-def config_local_tz() -> str:
-    from . import goaround_adapter as ga
-    return ga.config.LOCAL_TZ
+from .compare import CHANGE_MEASURES, paired_windows  # noqa: E402,F401
+from .compare import _ratio_ci as _compare_ratio_ci  # noqa: E402
 
 
 def _ratio_ci(per_day: dict, days: np.ndarray, reps: int, seed: int,
               fn) -> tuple[float, float, float]:
-    """Point value and day-block bootstrap 95 % CI of fn(sums) where sums
-    are the per-day arrays in per_day summed over a resample of days."""
-    sums = {k: v.sum() for k, v in per_day.items()}
-    point = fn(sums)
-    if len(days) < 2 or not np.isfinite(point):
-        return point, np.nan, np.nan
-    rng = np.random.default_rng(seed)
-    idx = rng.integers(0, len(days), size=(reps, len(days)))
-    boot = fn({k: v[idx].sum(axis=1) for k, v in per_day.items()})
-    boot = boot[np.isfinite(boot)]
-    if not len(boot):
-        return point, np.nan, np.nan
-    return (point, float(np.percentile(boot, 2.5)),
-            float(np.percentile(boot, 97.5)))
+    return _compare_ratio_ci(per_day, len(days), reps, seed, fn)
 
 
 def change_summary(ga: pd.DataFrame, ctl: pd.DataFrame, reps: int,
                    seed: int) -> pd.DataFrame:
     """Before -> after totals around go-arounds and around normal
-    landings (weighted to the go-arounds' hours of day), and the ratio of
-    the two changes. One row per measure in CHANGE_MEASURES. `ga` and
-    `ctl` come from paired_windows()."""
-    g = ga[~ga["excluded"]].copy()
-    c = ctl[~ctl["excluded"]].copy()
-    n_ga_h = g["hour"].value_counts()
-    n_c_h = c["hour"].value_counts()
-    c["w"] = c["hour"].map(lambda h: n_ga_h.get(h, 0) / n_c_h.get(h, 1)
-                           if n_c_h.get(h, 0) else 0.0)
-    days = np.array(sorted(set(g["day"].dropna()) | set(c["day"].dropna())))
-    rows = []
-    for key, col, label in CHANGE_MEASURES:
-        if f"pre_{col}" not in g.columns:
-            continue
-
-        def per_day(df, which, weight=None):
-            v = df[f"{which}_{col}"].fillna(0.0).to_numpy(float)
-            if weight is not None:
-                v = v * df[weight].to_numpy(float)
-            s = pd.Series(v).groupby(df["day"].to_numpy()).sum()
-            return s.reindex(days, fill_value=0.0).to_numpy()
-
-        pd_ = {"gp": per_day(g, "pre"), "ga": per_day(g, "post"),
-               "cp": per_day(c, "pre", "w"), "ca": per_day(c, "post", "w")}
-
-        def div(a, b):
-            with np.errstate(divide="ignore", invalid="ignore"):
-                return np.where(b > 0, a / b, np.nan)
-
-        r_ga = _ratio_ci(pd_, days, reps, seed,
-                         lambda s: div(s["ga"], s["gp"]))
-        r_c = _ratio_ci(pd_, days, reps, seed,
-                        lambda s: div(s["ca"], s["cp"]))
-        r_d = _ratio_ci(pd_, days, reps, seed,
-                        lambda s: div(div(s["ga"], s["gp"]),
-                                      div(s["ca"], s["cp"])))
-        d = (g[f"post_{col}"] - g[f"pre_{col}"]).dropna().to_numpy()
-        p = (float(stats.wilcoxon(d).pvalue)
-             if len(d) >= 6 and np.any(d != 0) else np.nan)
-        rows.append({
-            "measure": key, "label": label, "n_events": int(len(g)),
-            "n_controls": int((c["w"] > 0).sum()),
-            "before_total": float(g[f"pre_{col}"].sum()),
-            "after_total": float(g[f"post_{col}"].sum()),
-            "ratio": float(r_ga[0]), "ratio_lo": r_ga[1], "ratio_hi": r_ga[2],
-            "paired_p": p,
-            "normal_ratio": float(r_c[0]), "normal_ratio_lo": r_c[1],
-            "normal_ratio_hi": r_c[2],
-            "vs_normal": float(r_d[0]), "vs_normal_lo": r_d[1],
-            "vs_normal_hi": r_d[2],
-        })
-    return pd.DataFrame(rows)
+    landings matched on the hour of day, and the ratio of the two
+    changes (compare.change_summary)."""
+    from .compare import change_summary as _cs
+    return _cs(ga, ctl, reps, seed)
 
 
 def ga_aircraft_involvement(ewm: pd.DataFrame, einv: pd.DataFrame,

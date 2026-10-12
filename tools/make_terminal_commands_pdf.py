@@ -91,6 +91,17 @@ COMMANDS = [
          "overrides). It is never overwritten; delete it to regenerate."),
     ]),
     ("4. Running the analysis", [
+        ("python run_proximity.py",
+         "Interactive: asks which dataset, shows what it found (days, "
+         "airport profile, pairwise cache, go-around runs, stored "
+         "baseline), asks what to produce (figures, per-event pictures, "
+         "sensitivity, probability add-on), prints the equivalent command "
+         "and starts."),
+        ("Run Proximity Analysis.command  (double-click in Finder)",
+         "macOS: the same questions without opening Terminal yourself. It "
+         "uses .venv when present. If macOS blocks it the first time: "
+         "right-click > Open > Open. If it is not executable after a "
+         "download: chmod +x \"Run Proximity Analysis.command\"."),
         ("python run_proximity.py KMCO_2025Q1",
          "The complete run: go-around detection -> output/KMCO/goaround/"
          "run_NN/, then baseline (built or reused), encounters, window "
@@ -174,7 +185,10 @@ COMMANDS = [
         ("output/KMCO/proximity_risk/run_NN/",
          "run_config.txt, ceiling_check.csv, data_quality.csv, "
          "window_metrics.parquet, encounters.parquet/.csv, "
-         "go_around_risk.csv, change_summary.csv, go_around_aircraft.csv, "
+         "go_around_risk.csv, change_summary.csv (main result: go-arounds "
+         "vs normal landings), landing_comparison/ (before-window checks, "
+         "pre-trend, placebo, regression, robustness, minute by minute), "
+         "landing_windows.csv, go_around_aircraft.csv, "
          "results_primary.csv, equilibrium.csv, epoch.csv, sensitivity.csv, "
          "figures/, events/, summary.pdf (start here: key results and a "
          "glossary on page 1)."),

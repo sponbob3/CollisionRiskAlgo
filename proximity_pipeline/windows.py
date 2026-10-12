@@ -252,6 +252,22 @@ class Exposure:
         agg["partial"] = agg["covered_s"] < agg["seconds"]
         return agg
 
+    def sums(self, starts, ends) -> tuple[np.ndarray, np.ndarray]:
+        """Aircraft-seconds and pair-seconds over many intervals at once
+        (vectorised; intervals may cross midnight). Used for the
+        minute-by-minute curves, where the per-interval details of
+        interval() are not needed."""
+        starts = np.asarray(starts, np.int64)
+        ends = np.asarray(ends, np.int64)
+        ac = np.zeros(len(starts)); ps = np.zeros(len(starts))
+        for t0, da in self.days.items():
+            a = np.clip(starts - t0, 0, DAY_S)
+            b = np.clip(ends - t0, 0, DAY_S)
+            m = b > a
+            ac[m] += da.cum_n[b[m]] - da.cum_n[a[m]]
+            ps[m] += da.cum_pairs[b[m]] - da.cum_pairs[a[m]]
+        return ac, ps
+
     def leg_exposure(self, icao24: str, t_start: int, t_end: int) -> dict:
         """Exposure of one aircraft (all its legs with that icao24) in
         the interval: seconds present and pair-seconds involving it."""
@@ -414,9 +430,12 @@ def quality_class(interp_fraction, gaps_per_aircraft, outage) -> np.ndarray:
 def interval_metrics(intervals: pd.DataFrame, exposure: Exposure,
                      enc: pd.DataFrame, days: dict[str, DayCache],
                      usage: pd.DataFrame,
-                     expected: pd.DataFrame | None = None) -> pd.DataFrame:
+                     expected: pd.DataFrame | None = None,
+                     with_smin: bool = True) -> pd.DataFrame:
     """Per-interval metrics (sections 8.2-8.4). `intervals` has t_start,
-    t_end (epoch s) and any id columns, which are kept."""
+    t_end (epoch s) and any id columns, which are kept. with_smin=False
+    skips the closest-separation column (a pass over every pair of the
+    dataset), for windows that only need counts and traffic."""
     spec = exposure.spec
     rows = [exposure.interval(int(a), int(b))
             for a, b in zip(intervals["t_start"], intervals["t_end"])]
@@ -450,7 +469,8 @@ def interval_metrics(intervals: pd.DataFrame, exposure: Exposure,
     # encounters and severity
     counts = attribute_encounters(enc, out, spec.tiers)
     out = pd.concat([out, counts], axis=1)
-    out["s_min"] = s_min_per_interval(days, spec, out)
+    out["s_min"] = (s_min_per_interval(days, spec, out) if with_smin
+                    else np.nan)
     if expected is not None:
         for c in expected.columns:
             out[c] = expected[c].to_numpy()
