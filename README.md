@@ -14,53 +14,173 @@ Pure Python (pandas / NumPy / SciPy / statsmodels, no machine learning):
 every threshold is a named, documented parameter in
 `proximity_pipeline/config.py`; nothing airport-specific is in code.
 
-## Quick start
+## Getting started
 
-Python 3.12 (3.11 also works). Python 3.13+ is not yet supported by all
-of the traffic library's dependencies, which then have to be compiled.
+You only type a few setup commands once. After that you start the program
+and it asks for everything else.
+
+### 1. Install Python 3.12
+
+Use **Python 3.12** (3.11 also works). Newer versions (3.13, 3.14) are not
+supported yet by some dependencies of the `traffic` library, and macOS's
+built-in `python3` is too old.
+
+- **macOS:** download the *macOS 64-bit universal2 installer* for Python
+  3.12 from <https://www.python.org/downloads/macos/> and run it.
+  (Homebrew's `python@3.12` does not run on older, unsupported macOS
+  versions; the python.org installer does.)
+- **Windows:** download Python 3.12 from
+  <https://www.python.org/downloads/windows/> and tick
+  **"Add python.exe to PATH"** in the installer.
+- **Linux:** install `python3.12` and `python3.12-venv` with your package
+  manager.
+
+Check it in a new terminal window:
 
 ```bash
-python3.12 --version               # install Python 3.12 from python.org
-                                   # (or: brew install python@3.12)
-python3.12 -m venv .venv && source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-# every new terminal: source .venv/bin/activate  (prompt shows "(.venv)")
-
-# put daily .parquet/.csv files of ALL traffic around the airport in
-# datasets/<folder>/ (directly or in subfolders, e.g. one per month); any
-# folder name starting with the airport code works (KMCO, kmco_2025q1, ...)
-#   e.g. datasets/KMCO_2025Q1/2025-01/KMCO_20250101.parquet
-python run_proximity.py check-data KMCO_2025Q1    # audit the data first
-python run_proximity.py KMCO_2025Q1               # the whole analysis
-python run_proximity.py                           # or: answer questions
+python3.12 --version        # macOS / Linux  -> Python 3.12.x
+py -3.12 --version          # Windows        -> Python 3.12.x
 ```
 
-**No typing needed:** `python run_proximity.py` with no arguments asks
-which dataset to analyse, shows what it found (days of data, airport
-profile, pairwise cache, earlier go-around runs, stored baseline), asks
-what to produce (figures, per-event pictures, sensitivity analysis), shows
-the equivalent command and starts. On a Mac you can instead double-click
-**`Run Proximity Analysis.command`** in Finder: it opens Terminal, uses
-the `.venv` environment, and asks the same questions. (If macOS blocks it
-the first time: right-click it, choose Open, then Open.)
+### 2. Get the code
 
-The airport profile is created automatically on the first run (see
-below); nothing has to be edited by hand. Events are go-arounds and
-touch-and-goes: both put an aircraft back into the airspace on a
-climb-out, so both are analysed; each keeps its own name in every table
-and plot, and results are also given per type.
+```bash
+git clone https://github.com/sponbob3/CollisionRiskAlgo.git
+cd CollisionRiskAlgo
+```
 
-One run writes two fresh numbered folders with the same number:
+(or download the ZIP from GitHub and open a terminal in the unzipped folder).
+
+### 3. Create the Python environment (once)
+
+All commands below are run inside the `CollisionRiskAlgo` folder.
+
+macOS / Linux:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Windows (PowerShell or Command Prompt):
+
+```bat
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+The prompt now starts with `(.venv)`. In every **new** terminal window,
+activate the environment again (`source .venv/bin/activate`, or
+`.venv\Scripts\activate` on Windows) before running anything. Use
+`python -m pip`, not bare `pip`: it always installs into the active
+environment. The Mac launcher in step 5 activates the environment by
+itself.
+
+### 4. Add your data
+
+Put one file per day (`.parquet` preferred, `.csv` accepted) of OpenSky
+ADS-B state vectors for **all traffic around the airport** into a folder
+under `datasets/`, directly or in subfolders (e.g. one per month):
+
+```
+datasets/
+  KMCO_2025Q1/
+    2025-01/KMCO_20250101.parquet
+    2025-01/KMCO_20250102.parquet
+    ...
+```
+
+The folder name only has to start with the airport's ICAO code (`KMCO`,
+`kmco_2025q1` and `KMCO-2025Q1` all work); capitalisation does not
+matter, and renaming it later loses nothing. Required columns:
+`timestamp, icao24, callsign, latitude, longitude, altitude,
+geoaltitude, vertical_rate, groundspeed, track, onground`
+(`last_position` is used when present). `datasets/` is never committed.
+
+### 5. Run it
+
+- **macOS:** double-click **`Run Proximity Analysis.command`** in Finder.
+  The first time, macOS may block it: right-click it, choose **Open**,
+  then **Open**. If it says it cannot be executed (e.g. after
+  downloading a ZIP), run `chmod +x "Run Proximity Analysis.command"`
+  once in the repository folder.
+- **Any system:** with the environment active, run
+
+  ```bash
+  python run_proximity.py
+  ```
+
+**The program asks for everything.** It lists the datasets it finds and
+asks which one to analyse, then shows what it found and asks what to do:
+
+1. dataset (always asked);
+2. airport profile (created automatically from the OurAirports database
+   and the data the first time; needs internet once);
+3. pairwise cache: reuse the per-day computations or recompute them;
+4. go-around detection: reuse an earlier run made from the same data, or
+   detect again;
+5. baseline: reuse the stored one or rebuild it;
+6. outputs: figures and PDFs, one plot per go-around, sensitivity
+   analysis, the optional probability add-on;
+7. settings: keep the defaults or change window length, workers and
+   ambiguous go-arounds;
+8. a summary of every choice and the equivalent command, then start or
+   cancel.
+
+Answer with the option number; Enter alone picks option 1. The first run
+on new data computes the per-day cache (the slowest step: up to a few
+hours for three months of data); later runs reuse it and take minutes.
+The sensitivity analysis adds a few hours.
+
+### 6. Results
+
+Open `output/<ICAO>/proximity_risk/run_NN/summary.pdf` first: key results
+in plain sentences, the checks behind them and a glossary on page 1, and
+every figure captioned. One run writes two numbered folders with the same
+number:
 
 | folder | content |
 |---|---|
-| `output/KBNA/goaround/run_NN/` | the go-around pipeline's outputs (`all_approaches.csv`, `go_around_events.csv`, `summary.pdf`, per-event plots, `run_config.txt`); climb-aways whose low point was hidden below the ADS-B coverage floor are go-arounds (`reclassified_from`, `low_point_hidden_s` columns; FRAMEWORK.md section 13) |
-| `output/KBNA/proximity_risk/run_NN/` | `summary.pdf` (key results in plain sentences, checks and a glossary on page 1; every figure captioned), `change_summary.csv` (the main result: the before → after change around go-arounds vs the same change around normal landings at the same hours), `landing_comparison/` (the checks behind it: before-window checks of both groups against the baseline, pre-trend, placebo, regression, robustness, leave-one-out, minute by minute), `landing_windows.csv`, `go_around_aircraft.csv` (the event aircraft vs other aircraft), `results_primary.csv` (rates per unit of traffic: IRR / SIR per endpoint), `go_around_risk.csv` (one row per go-around or touch-and-go), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around or touch-and-go), `run_config.txt` |
-| `output/KBNA/proximity_risk/baseline/<label>/` | the stored, validated baseline (`baseline.json`, `baseline_windows.parquet`, `phase1_removed.csv`, `validation/`, `baseline_report.pdf`), reused automatically while the data and parameters match |
+| `output/KMCO/goaround/run_NN/` | the go-around pipeline's outputs (`all_approaches.csv`, `go_around_events.csv`, `summary.pdf`, per-event plots, `run_config.txt`); climb-aways whose low point was hidden below the ADS-B coverage floor are go-arounds (`reclassified_from`, `low_point_hidden_s` columns; FRAMEWORK.md section 13) |
+| `output/KMCO/proximity_risk/run_NN/` | `summary.pdf`, `change_summary.csv` (the main result: the before → after change around go-arounds vs the same change around normal landings at the same hours), `landing_comparison/` (the checks behind it: before-window checks of both groups against the baseline, pre-trend, placebo, regression, robustness, leave-one-out, minute by minute), `landing_windows.csv`, `go_around_aircraft.csv` (the event aircraft vs other aircraft), `results_primary.csv` (rates per unit of traffic: IRR / SIR per endpoint), `go_around_risk.csv` (one row per go-around or touch-and-go), `equilibrium.csv`, `epoch.csv`, `sensitivity.csv`, `encounters.csv`, `window_metrics.parquet`, `ceiling_check.csv`, `data_quality.csv`, `figures/`, `events/` (one PNG per go-around or touch-and-go), `run_config.txt` |
+| `output/KMCO/proximity_risk/baseline/<label>/` | the stored, validated baseline (`baseline.json`, `baseline_windows.parquet`, `phase1_removed.csv`, `validation/`, `baseline_report.pdf`), reused automatically while the data and settings match |
+| `output/KMCO/proximity_risk/cache/` | per-day pairwise computations, reused by every later run |
 
-Every command and option, with examples, is in **TERMINAL_COMMANDS.pdf**
-(regenerate with `python tools/make_terminal_commands_pdf.py`).
+Events are go-arounds and touch-and-goes: both put an aircraft back into
+the airspace on a climb-out, so both are analysed; each keeps its own
+name in every table and plot.
+
+### Command-line options (optional)
+
+Everything the questions do can also be typed directly; the program
+prints the matching command before it starts.
+
+```bash
+python run_proximity.py KMCO_2025Q1                   # whole analysis, no questions
+python run_proximity.py KMCO_2025Q1 --goaround-run 1  # reuse goaround/run_01
+python run_proximity.py check-data KMCO_2025Q1        # data audit only
+python run_proximity.py new-airport KMCO KMCO_2025Q1  # airport profile only
+```
+
+| option | effect |
+|---|---|
+| `--goaround-run N` | reuse `output/<ICAO>/goaround/run_N` instead of detecting again |
+| `--rebuild-baseline` | rebuild the baseline even if a matching one is stored |
+| `--baseline-only` | build and validate the baseline, then stop |
+| `--baseline-from DATASET` | score against another dataset's stored baseline (same airport) |
+| `--no-sensitivity` | skip the sensitivity analysis |
+| `--no-plots` / `--no-event-plots` | skip all figures / only the per-event plots |
+| `--probability` | also run the optional conflict-probability model |
+| `--window MIN` | before/after window length (default 10) |
+| `--include-ambiguous` | count ambiguous go-arounds as events |
+| `--airport ICAO` | airport code, when the folder name does not start with it |
+| `--workers N` | parallel day processing (default: CPU count − 1) |
+| `--limit N` | first N days only (quick test) |
+| `--goaround-report` / `--calibrate` | extra outputs from the go-around stage |
 
 ## Method (one paragraph)
 
@@ -122,7 +242,6 @@ report time before either stage runs (FRAMEWORK.md section 4.2).
 run_proximity.py              <- the only file you run (no arguments: asks questions)
 Run Proximity Analysis.command <- macOS: double-click in Finder to start
 FRAMEWORK.md                  <- method and build specification
-TERMINAL_COMMANDS.pdf         <- every command with examples
 airports/<ICAO>.yaml          <- airport profiles (+ airspace, flows)
 datasets/<folder>/            <- your data (gitignored; name it e.g. KMCO_2025Q1)
 output/                       <- runs, baselines, caches (gitignored)
@@ -146,7 +265,6 @@ proximity_pipeline/
   goaround_adapter.py         the only bridge to goaround_pipeline
   viz.py / report_pdf.py      figures, summary.pdf, baseline_report.pdf
   validate_cpa.py             cross-check vs the traffic library
-tools/make_terminal_commands_pdf.py
 tools/make_synthetic_dataset.py   <- synthetic traffic for tests/smoke runs
 tests/                        pytest suite (FRAMEWORK.md section 18)
 ```
