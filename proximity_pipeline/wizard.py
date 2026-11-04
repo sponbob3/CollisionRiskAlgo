@@ -1,6 +1,7 @@
 """
 Interactive start (python run_proximity.py with no arguments, or the
-double-clickable "Run Proximity Analysis.command" on a Mac): asks which
+double-clickable launchers: "Run Proximity Analysis.command" on macOS,
+"Run Proximity Analysis.bat" on Windows): asks which
 airport/dataset to analyse, shows what was found (data, airport profile,
 pairwise cache, go-around runs, stored baseline), asks what to produce,
 prints the equivalent one-line command, and starts the run. The command
@@ -335,6 +336,10 @@ def _run() -> None:
     run_dir = pipeline.run_all(dataset, args, argv=["run_proximity.py"]
                                + " ".join(cmd[1:]).split())
     print(f"\n{LINE}\ndone: {run_dir.relative_to(config.ROOT)}/\n{LINE}")
-    if sys.platform == "darwin" and plots and _choose(
-            "Open the run folder in Finder?", ["yes", "no"]) == 0:
-        subprocess.run(["open", str(run_dir)], check=False)
+    if plots and sys.platform in ("darwin", "win32"):
+        where = "Finder" if sys.platform == "darwin" else "File Explorer"
+        if _choose(f"Open the run folder in {where}?", ["yes", "no"]) == 0:
+            if sys.platform == "darwin":
+                subprocess.run(["open", str(run_dir)], check=False)
+            else:
+                os.startfile(str(run_dir))  # noqa: S606 (Windows only)

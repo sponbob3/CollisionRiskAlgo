@@ -793,10 +793,10 @@ computed; reuse or rebuild), the go-around runs for this dataset (reuse
 one or detect again), the stored baseline (reuse or force a rebuild),
 and asks what to produce (figures and PDFs, per-event pictures,
 sensitivity, probability add-on, advanced settings). It prints the
-equivalent one-line command before starting. On a Mac,
-`Run Proximity Analysis.command` at the repository root does the same
-when double-clicked in Finder (it opens Terminal and uses `.venv` when
-present).
+equivalent one-line command before starting. Double-click launchers at
+the repository root do the same: `Run Proximity Analysis.command` on
+macOS (opens Terminal) and `Run Proximity Analysis.bat` on Windows
+(opens a console window); both use `.venv` when present.
 
 This (1) runs go-around detection → `output/KBNA/goaround/run_NN/`,
 (2) builds or reuses the baseline, (3) computes encounters and window
@@ -874,6 +874,7 @@ line option.
 ```
 run_proximity.py              <- the only file you run
 Run Proximity Analysis.command <- macOS: double-click to start (asks questions)
+Run Proximity Analysis.bat    <- Windows: double-click to start (asks questions)
 FRAMEWORK.md                  <- this document
 README.md
 requirements.txt

@@ -19,6 +19,12 @@ every threshold is a named, documented parameter in
 You only type a few setup commands once. After that you start the program
 and it asks for everything else.
 
+| You use | Set up with (step 3) | Start with (step 5) |
+|---|---|---|
+| **macOS** | the macOS / Linux commands | double-click **`Run Proximity Analysis.command`** |
+| **Windows** | the Windows commands | double-click **`Run Proximity Analysis.bat`** |
+| **Linux** | the macOS / Linux commands | `python run_proximity.py` in a terminal |
+
 ### 1. Install Python 3.12
 
 Use **Python 3.12** (3.11 also works). Newer versions (3.13, 3.14) are not
@@ -55,7 +61,7 @@ cd CollisionRiskAlgo
 
 All commands below are run inside the `CollisionRiskAlgo` folder.
 
-macOS / Linux:
+**macOS and Linux users** (Terminal):
 
 ```bash
 python3.12 -m venv .venv
@@ -64,7 +70,7 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Windows (PowerShell or Command Prompt):
+**Windows users** (Command Prompt or PowerShell):
 
 ```bat
 py -3.12 -m venv .venv
@@ -77,8 +83,9 @@ The prompt now starts with `(.venv)`. In every **new** terminal window,
 activate the environment again (`source .venv/bin/activate`, or
 `.venv\Scripts\activate` on Windows) before running anything. Use
 `python -m pip`, not bare `pip`: it always installs into the active
-environment. The Mac launcher in step 5 activates the environment by
-itself.
+environment. The double-click launchers in step 5 (macOS and Windows)
+use the environment by themselves, so with them you never have to
+activate it.
 
 ### 4. Add your data
 
@@ -103,16 +110,25 @@ geoaltitude, vertical_rate, groundspeed, track, onground`
 
 ### 5. Run it
 
-- **macOS:** double-click **`Run Proximity Analysis.command`** in Finder.
-  The first time, macOS may block it: right-click it, choose **Open**,
-  then **Open**. If it says it cannot be executed (e.g. after
-  downloading a ZIP), run `chmod +x "Run Proximity Analysis.command"`
-  once in the repository folder.
-- **Any system:** with the environment active, run
+- **macOS users:** double-click **`Run Proximity Analysis.command`** in
+  Finder. A Terminal window opens and the questions start. The first
+  time, macOS may block it: right-click it, choose **Open**, then
+  **Open**. If it says it cannot be executed (e.g. after downloading a
+  ZIP), run `chmod +x "Run Proximity Analysis.command"` once in the
+  repository folder.
+- **Windows users:** double-click **`Run Proximity Analysis.bat`** in File
+  Explorer. A console window opens and the questions start. If Windows
+  shows "Windows protected your PC", click **More info**, then **Run
+  anyway**.
+- **Linux users (or anyone who prefers a terminal):** with the
+  environment active, run
 
   ```bash
   python run_proximity.py
   ```
+
+Both launchers are only shortcuts for `python run_proximity.py`; they
+need the environment from step 3 to exist.
 
 **The program asks for everything.** It lists the datasets it finds and
 asks which one to analyse, then shows what it found and asks what to do:
@@ -241,6 +257,7 @@ report time before either stage runs (FRAMEWORK.md section 4.2).
 ```
 run_proximity.py              <- the only file you run (no arguments: asks questions)
 Run Proximity Analysis.command <- macOS: double-click in Finder to start
+Run Proximity Analysis.bat    <- Windows: double-click in File Explorer to start
 FRAMEWORK.md                  <- method and build specification
 airports/<ICAO>.yaml          <- airport profiles (+ airspace, flows)
 datasets/<folder>/            <- your data (gitignored; name it e.g. KMCO_2025Q1)
