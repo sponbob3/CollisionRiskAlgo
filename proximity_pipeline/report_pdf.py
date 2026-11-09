@@ -142,6 +142,11 @@ def _figure(story, S, title, path, caption):
                                Paragraph(caption, S["caption"])]))
 
 
+def _code_version() -> str:
+    from . import code_version_text
+    return code_version_text()
+
+
 def _doc(path: Path, title: str):
     return SimpleDocTemplate(
         str(path), pagesize=letter, leftMargin=MARGIN, rightMargin=MARGIN,
@@ -410,7 +415,8 @@ def summary(run_dir: Path, res: dict, chk: dict, ev: pd.DataFrame,
         f"day{'s' if len(days) != 1 else ''}  "
         f"·  {event_count_text(ev)}  ·  {config.WINDOW_MIN:g}-minute windows  "
         f"·  area: {config.VOLUME_RADIUS_NM:g} NM radius, up to "
-        f"{chk['effective_ceiling_ft_agl']:,.0f} ft above the airfield",
+        f"{chk['effective_ceiling_ft_agl']:,.0f} ft above the airfield"
+        f"  ·  code {_code_version()}",
         S["sub"]))
 
     story.append(Paragraph("Key results", S["h2"]))

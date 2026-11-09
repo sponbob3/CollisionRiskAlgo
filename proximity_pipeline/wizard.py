@@ -106,7 +106,8 @@ TOTAL_STEPS = 8
 def _run() -> None:
     import run_proximity as rp
     print(LINE)
-    print(" PROXIMITY RISK AFTER GO-AROUNDS")
+    from proximity_pipeline import __version__
+    print(f" PROXIMITY RISK AFTER GO-AROUNDS  (CollisionRiskAlgo v{__version__})")
     print(" Answer with the option number; Enter alone = option 1.")
     print(LINE)
 

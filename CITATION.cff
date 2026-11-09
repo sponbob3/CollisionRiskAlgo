@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: "CollisionRiskAlgo: An ADS-B Algorithm for Quantifying Proximity Encounters and Traffic Exposure Around Go-Arounds"
+abstract: >-
+  CollisionRiskAlgo detects go-arounds in ADS-B surveillance data and
+  quantifies proximity risk in the terminal airspace around them. Each
+  second, every aircraft pair within 10 nautical miles of the airport is
+  evaluated against three proximity thresholds, from standard radar
+  separation (3 NM, 1,000 ft) to a near mid-air collision volume, using
+  observed positions and 120-second straight-line projections. Encounter
+  counts and traffic exposure (aircraft-pair time) in the ten minutes
+  before and after each go-around are compared with the same change around
+  full-stop landings at matching times of day, with day-block bootstrap
+  confidence intervals, a traffic-adjusted baseline, placebo, pre-trend,
+  robustness and sensitivity checks.
+authors:
+  - family-names: Asim
+    given-names: Rayyan
+    affiliation: Embry-Riddle Aeronautical University
+version: 0.1.0
+date-released: "2026-11-09"
+license: MIT
+repository-code: "https://github.com/sponbob3/CollisionRiskAlgo"
+keywords:
+  - aviation safety
+  - go-around
+  - ADS-B
+  - OpenSky Network
+  - proximity risk
+  - mid-air collision
+  - terminal airspace
+  - In-time Aviation Safety Management System

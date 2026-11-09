@@ -862,6 +862,12 @@ profile without an `airspace:` block gets the default block added.
 aircraft counts, coverage gaps/outages, altitude-reference availability, and
 whether the data volume meets the baseline minimum.
 
+**Code version**: `proximity_pipeline.__version__` (0.1.0) and the git
+commit (with a note when tracked files have uncommitted changes) are
+printed at the start of every run and written to `run_config.txt` and the
+header of `summary.pdf`, so every result is tied to a release
+(`CITATION.cff`).
+
 **Setup and usage**: the README's *Getting started* section covers the
 Python 3.12 environment, the requirements, the data layout, starting the
 program (interactive questions or the macOS launcher) and every command-

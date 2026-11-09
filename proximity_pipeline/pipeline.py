@@ -325,8 +325,10 @@ def dump_run_config(run_dir: Path, dataset: Path, n_files: int,
     """Full provenance record: every resolved parameter of both config
     modules, the dataset, versions, and the resolved run facts."""
     import matplotlib, scipy, statsmodels
+    from . import code_version_text
     lines = [
         f"run_time: {datetime.datetime.now().isoformat(timespec='seconds')}",
+        f"code: CollisionRiskAlgo {code_version_text()}",
         f"dataset: {dataset.name}  ({n_files} daily files)",
         f"command: {' '.join(argv)}",
         f"python: {sys.version.split()[0]}  pandas: {pd.__version__}  "
@@ -653,6 +655,8 @@ def run_all(dataset: Path, args, argv: list[str]) -> Path:
         files = files[:args.limit]
     if not files:
         raise FileNotFoundError(f"no .parquet/.csv files in {dataset}")
+    from . import code_version_text
+    print(f"CollisionRiskAlgo {code_version_text()}")
     print(f"dataset: {dataset.name}  airport: {icao}  days: {len(files)}  "
           f"window: {window_min:g} min  -> {rel(run_dir)}")
 

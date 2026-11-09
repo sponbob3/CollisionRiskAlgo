@@ -258,6 +258,7 @@ report time before either stage runs (FRAMEWORK.md section 4.2).
 run_proximity.py              <- the only file you run (no arguments: asks questions)
 Run Proximity Analysis.command <- macOS: double-click in Finder to start
 Run Proximity Analysis.bat    <- Windows: double-click in File Explorer to start
+CITATION.cff / LICENSE        <- how to cite (version 0.1.0) / MIT license
 FRAMEWORK.md                  <- method and build specification
 airports/<ICAO>.yaml          <- airport profiles (+ airspace, flows)
 datasets/<folder>/            <- your data (gitignored; name it e.g. KMCO_2025Q1)
@@ -299,6 +300,23 @@ the conflict probability against Monte Carlo, baseline calibration on
 simulated windows, detection of an injected effect and the false-positive
 rate, go-around output parity with GoAroundAlgo, and closest-approach
 agreement with the traffic library.
+
+## How to cite
+
+Cite the release you used. GitHub's **"Cite this repository"** button
+(from `CITATION.cff`) gives APA and BibTeX:
+
+> Asim, R. (2026). *CollisionRiskAlgo: An ADS-B Algorithm for Quantifying
+> Proximity Encounters and Traffic Exposure Around Go-Arounds* (Version
+> 0.1.0) [Computer software]. https://github.com/sponbob3/CollisionRiskAlgo
+
+Every run records the code version and git commit it was made with
+(first console line, `run_config.txt`, and the header of `summary.pdf`),
+so results can always be matched to a release.
+
+## License
+
+MIT; see `LICENSE`.
 
 ## Data policy and limitations
 
