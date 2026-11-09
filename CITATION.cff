@@ -19,6 +19,7 @@ authors:
     given-names: Rayyan
     affiliation: Embry-Riddle Aeronautical University
 version: 0.1.0
+doi: 10.5281/zenodo.24093388
 date-released: "2026-11-09"
 license: MIT
 repository-code: "https://github.com/sponbob3/CollisionRiskAlgo"

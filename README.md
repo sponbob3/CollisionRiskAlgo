@@ -1,5 +1,7 @@
 # Proximity Risk After Go-Arounds
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24093388.svg)](https://doi.org/10.5281/zenodo.24093388)
+
 Does proximity risk in the terminal airspace around an airport increase
 after a go-around, relative to the same airspace immediately before the
 go-around and to the airport's own baseline behaviour? This repository
@@ -308,7 +310,7 @@ Cite the release you used. GitHub's **"Cite this repository"** button
 
 > Asim, R. (2026). *CollisionRiskAlgo: An ADS-B Algorithm for Quantifying
 > Proximity Encounters and Traffic Exposure Around Go-Arounds* (Version
-> 0.1.0) [Computer software]. https://github.com/sponbob3/CollisionRiskAlgo
+> 0.1.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.24093388
 
 Every run records the code version and git commit it was made with
 (first console line, `run_config.txt`, and the header of `summary.pdf`),
